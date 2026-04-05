@@ -135,7 +135,10 @@
       "Bash(grep -r \"getUser\\\\|getEmployee\\\\|/users/\\\\${\" /d/Projects/OMG_Teams/frontend/src --include=\"*.ts\" --include=\"*.tsx\")",
       "Bash(ls -la d:/Projects/OMG_Teams/backend/src/*.ts)",
       "Bash(grep -oP '\\\\S+$')",
-      "Bash(grep -oE '[a-z][-a-z/]+$')"
+      "Bash(grep -oE '[a-z][-a-z/]+$')",
+      "Bash(npm ls:*)",
+      "Bash(ls d:/Projects/OMG_Teams/frontend/public/sw* d:/Projects/OMG_Teams/frontend/public/workbox*)",
+      "Bash(npx next:*)"
     ]
   }
 }

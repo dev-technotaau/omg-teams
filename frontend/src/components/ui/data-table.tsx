@@ -286,6 +286,21 @@ export function DataTable<T>({
     [detailRowId, sortedData, getRowId],
   );
 
+  /* ── Row selection toggle (defined before keyboard nav so it can be referenced) ── */
+  const toggleRow = useCallback(
+    (id: string) => {
+      if (!onSelectionChange || !selectedIds) return;
+      const next = new Set(selectedIds);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      onSelectionChange(next);
+    },
+    [onSelectionChange, selectedIds],
+  );
+
   /* ── Keyboard navigation ── */
   const [focusedRowIndex, setFocusedRowIndex] = useState(-1);
 
@@ -400,20 +415,6 @@ export function DataTable<T>({
       onSelectionChange(new Set(allIds));
     }
   }, [allSelected, allIds, onSelectionChange]);
-
-  const toggleRow = useCallback(
-    (id: string) => {
-      if (!onSelectionChange || !selectedIds) return;
-      const next = new Set(selectedIds);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      onSelectionChange(next);
-    },
-    [onSelectionChange, selectedIds],
-  );
 
   /* Pagination helpers */
   const rangeStart = total != null ? (page - 1) * pageSize + 1 : null;
