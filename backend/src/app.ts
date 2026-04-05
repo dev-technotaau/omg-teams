@@ -9,7 +9,6 @@ import morgan from "morgan";
 import passport from "passport";
 import responseTime from "response-time";
 import swaggerUi from "swagger-ui-express";
-import xssClean from "xss-clean";
 import { ZodError } from "zod";
 import { createSecurityHeaders } from "./config/csp.js";
 import { env } from "./config/env.js";
@@ -81,10 +80,7 @@ export function createApp(): express.Application {
   app.use(express.urlencoded({ extended: true, limit: "10mb" }));
   app.use(cookieParser());
 
-  // ──────────────────────────────────────────────
-  //  XSS Sanitization (strip HTML from req.body/query/params)
-  // ──────────────────────────────────────────────
-  app.use(xssClean());
+  // XSS protection handled by WAF middleware (waf.ts) + DOMPurify sanitization (validators/purify.ts)
 
   // ──────────────────────────────────────────────
   //  CSRF Protection (double-submit cookie)

@@ -121,7 +121,6 @@
     "tesseract.js": "^7.0.0",
     "uuid": "^13.0.0",
     "web-push": "^3.6.7",
-    "xss-clean": "^0.1.4",
     "zod": "^4.3.6"
   },
   "devDependencies": {
