@@ -38,7 +38,7 @@
     "db:format": "prisma format",
     "db:validate": "prisma validate",
     "prepare": "cd .. && husky",
-    "postinstall": "prisma generate"
+    "postinstall": "npx prisma generate"
   },
   "keywords": [],
   "author": "",
