@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Download, X, RefreshCw } from "lucide-react";
+import { Download, X, RefreshCw, Share } from "lucide-react";
 
 // ──────────────────────────────────────────────
 //  §24.19.1 — PWA Install Prompt + Update Toast
@@ -12,12 +12,28 @@ interface BeforeInstallPromptEvent extends Event {
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
 }
 
+/** Detect iOS Safari (no beforeinstallprompt support) */
+function isIOS(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) && !("MSStream" in window);
+}
+
+/** Detect if already running as installed PWA */
+function isStandalone(): boolean {
+  if (typeof window === "undefined") return false;
+  return (
+    window.matchMedia("(display-mode: standalone)").matches ||
+    ("standalone" in navigator && (navigator as unknown as { standalone: boolean }).standalone)
+  );
+}
+
 export function PWAPrompt() {
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [showInstall, setShowInstall] = useState(false);
+  const [showIOSInstall, setShowIOSInstall] = useState(false);
   const [showUpdate, setShowUpdate] = useState(false);
 
-  // §24.19.1 — Capture beforeinstallprompt for install banner
+  // §24.19.1 — Capture beforeinstallprompt for install banner (Chromium)
   useEffect(() => {
     const handler = (e: Event) => {
       e.preventDefault();
@@ -29,6 +45,13 @@ export function PWAPrompt() {
     };
     window.addEventListener("beforeinstallprompt", handler);
     return () => window.removeEventListener("beforeinstallprompt", handler);
+  }, []);
+
+  // §24.19.1 — iOS Safari: show manual "Add to Home Screen" prompt
+  useEffect(() => {
+    if (isIOS() && !isStandalone() && !sessionStorage.getItem("pwa_install_dismissed")) {
+      setShowIOSInstall(true);
+    }
   }, []);
 
   // §24.19.1 — Detect service worker update for update toast
@@ -68,6 +91,7 @@ export function PWAPrompt() {
 
   const handleDismissInstall = useCallback(() => {
     setShowInstall(false);
+    setShowIOSInstall(false);
     sessionStorage.setItem("pwa_install_dismissed", "1");
   }, []);
 
@@ -78,9 +102,9 @@ export function PWAPrompt() {
 
   return (
     <>
-      {/* Install Banner */}
+      {/* Install Banner — Chromium (Android, Desktop) */}
       {showInstall && (
-        <div className="bg-primary-50 border-primary-200 fixed right-4 bottom-4 z-50 flex max-w-sm items-center gap-3 rounded-lg border p-4 shadow-lg">
+        <div className="bg-primary-50 border-primary-200 fixed right-4 bottom-4 left-4 z-50 flex items-center gap-3 rounded-lg border p-4 shadow-lg transition-shadow hover:shadow-xl sm:left-auto sm:max-w-sm">
           <Download size={20} className="text-primary-600 shrink-0" />
           <div className="min-w-0 flex-1">
             <p className="text-primary-900 text-sm font-medium">Install OMG Teams</p>
@@ -88,13 +112,33 @@ export function PWAPrompt() {
           </div>
           <button
             onClick={() => void handleInstall()}
-            className="bg-primary-600 hover:bg-primary-700 shrink-0 rounded-md px-3 py-1.5 text-xs font-medium text-white"
+            className="bg-primary-600 hover:bg-primary-700 active:bg-primary-800 shrink-0 rounded-md px-3 py-1.5 text-xs font-medium text-white transition-colors"
           >
             Install
           </button>
           <button
             onClick={handleDismissInstall}
-            className="text-primary-500 hover:text-primary-700 shrink-0"
+            className="text-primary-500 hover:text-primary-700 active:text-primary-800 shrink-0 rounded-md p-1 transition-colors hover:bg-primary-100"
+            aria-label="Dismiss"
+          >
+            <X size={16} />
+          </button>
+        </div>
+      )}
+
+      {/* Install Banner — iOS Safari */}
+      {showIOSInstall && (
+        <div className="bg-primary-50 border-primary-200 fixed right-4 bottom-4 left-4 z-50 flex items-center gap-3 rounded-lg border p-4 shadow-lg transition-shadow hover:shadow-xl sm:left-auto sm:max-w-sm">
+          <Share size={20} className="text-primary-600 shrink-0" />
+          <div className="min-w-0 flex-1">
+            <p className="text-primary-900 text-sm font-medium">Install OMG Teams</p>
+            <p className="text-primary-700 text-xs">
+              Tap <Share size={12} className="inline" /> then &quot;Add to Home Screen&quot;
+            </p>
+          </div>
+          <button
+            onClick={handleDismissInstall}
+            className="text-primary-500 hover:text-primary-700 active:text-primary-800 shrink-0 rounded-md p-1 transition-colors hover:bg-primary-100"
             aria-label="Dismiss"
           >
             <X size={16} />
@@ -104,7 +148,7 @@ export function PWAPrompt() {
 
       {/* Update Toast */}
       {showUpdate && (
-        <div className="bg-info-50 border-info-200 fixed right-4 bottom-4 z-50 flex max-w-sm items-center gap-3 rounded-lg border p-4 shadow-lg">
+        <div className="bg-info-50 border-info-200 fixed right-4 bottom-4 left-4 z-50 flex items-center gap-3 rounded-lg border p-4 shadow-lg transition-shadow hover:shadow-xl sm:left-auto sm:max-w-sm">
           <RefreshCw size={20} className="text-info-600 shrink-0" />
           <div className="min-w-0 flex-1">
             <p className="text-info-900 text-sm font-medium">Update available</p>
@@ -112,7 +156,7 @@ export function PWAPrompt() {
           </div>
           <button
             onClick={handleUpdate}
-            className="bg-info-600 hover:bg-info-700 shrink-0 rounded-md px-3 py-1.5 text-xs font-medium text-white"
+            className="bg-info-600 hover:bg-info-700 active:bg-info-800 shrink-0 rounded-md px-3 py-1.5 text-xs font-medium text-white transition-colors"
           >
             Refresh
           </button>
