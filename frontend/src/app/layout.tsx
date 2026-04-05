@@ -173,7 +173,7 @@ export default async function RootLayout({
               name: "Opportunity Makers Group",
               alternateName: "OMG Teams",
               url: "https://www.opportunitymakers.in",
-              logo: `${APP_URL}/icons/logo.png`,
+              logo: `${APP_URL}/icons/logo-light-theme.png`,
               description: APP_DESCRIPTION,
               address: {
                 "@type": "PostalAddress",

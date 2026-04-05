@@ -151,7 +151,7 @@ export function TiptapEditor({
     <div
       className={cn(
         "border-border-default overflow-hidden rounded-lg border",
-        isFullScreen && "bg-bg-primary fixed inset-0 z-50 flex flex-col overflow-auto",
+        isFullScreen && "bg-bg-page fixed inset-0 z-50 flex flex-col overflow-auto",
         className,
       )}
     >
@@ -516,7 +516,7 @@ export function TiptapEditor({
       </div>
 
       {/* Editor content */}
-      <EditorContent editor={editor} className="bg-bg-primary min-h-[250px]" />
+      <EditorContent editor={editor} className="bg-bg-surface min-h-[250px]" />
 
       {/* §29.4.1.3 — Character/line limit counter */}
       <div

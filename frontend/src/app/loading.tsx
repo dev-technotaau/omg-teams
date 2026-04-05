@@ -4,7 +4,7 @@
  */
 export default function Loading() {
   return (
-    <div className="bg-bg-primary flex min-h-screen flex-col items-center justify-center gap-4">
+    <div className="bg-bg-page flex min-h-screen flex-col items-center justify-center gap-4">
       {/* Platform logo / name */}
       <div className="animate-pulse">
         <h1 className="text-primary-500 text-2xl font-bold tracking-tight">OMG Teams</h1>

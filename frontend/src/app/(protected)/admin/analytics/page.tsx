@@ -212,7 +212,7 @@ function CardShell({
 
   return (
     <div
-      className={isFullScreen ? "bg-bg-primary fixed inset-0 z-50 overflow-auto p-6" : undefined}
+      className={isFullScreen ? "bg-bg-page fixed inset-0 z-50 overflow-auto p-6" : undefined}
     >
       <Card>
         <Card.Header>

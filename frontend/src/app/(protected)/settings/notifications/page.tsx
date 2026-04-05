@@ -25,6 +25,8 @@ import {
 } from "@/services/notification-preference.service";
 import { PageHeader, Card, Switch, Badge, Button, Spinner } from "@/components/ui";
 import { TimePicker } from "@/components/ui/time-picker";
+import { useAuth } from "@/contexts/auth";
+import { usePushNotifications } from "@/hooks/use-push-notifications";
 
 // ──────────────────────────────────────────────
 //  Notification Preferences Settings
@@ -81,6 +83,8 @@ const CHANNELS = [
 ];
 
 export default function NotificationPreferencesPage() {
+  const { user } = useAuth();
+  const { permission, enable: enablePush } = usePushNotifications(user?.id);
   const [preferences, setPreferences] = useState<NotificationPreference[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -106,6 +110,20 @@ export default function NotificationPreferencesPage() {
   }, [fetchPreferences]);
 
   const updatePref = (category: string, field: keyof NotificationPreference, value: boolean) => {
+    // Request browser notification permission when enabling push for the first time
+    if (field === "browserPushEnabled" && value && permission !== "granted") {
+      void enablePush().then((granted) => {
+        if (!granted) {
+          toast.error("Browser notification permission denied. Enable it in browser settings.");
+          return;
+        }
+        setPreferences((prev) =>
+          prev.map((p) => (p.category === category ? { ...p, [field]: value } : p)),
+        );
+        setHasChanges(true);
+      });
+      return;
+    }
     setPreferences((prev) =>
       prev.map((p) => (p.category === category ? { ...p, [field]: value } : p)),
     );
@@ -113,6 +131,9 @@ export default function NotificationPreferencesPage() {
   };
 
   const toggleAll = (enabled: boolean) => {
+    if (enabled && permission !== "granted") {
+      void enablePush();
+    }
     setPreferences((prev) =>
       prev.map((p) => ({
         ...p,

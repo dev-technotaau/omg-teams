@@ -19,7 +19,7 @@ const variantClasses: Record<NonNullable<BadgeProps["variant"]>, string> = {
   success: "bg-success-100 text-success-700",
   warning: "bg-warning-100 text-warning-700",
   danger: "bg-error-100 text-error-700",
-  info: "bg-blue-100 text-blue-700",
+  info: "bg-info-100 text-info-700",
   outline: "border border-border-default text-text-secondary",
 };
 
@@ -29,7 +29,7 @@ const dotColorClasses: Record<NonNullable<BadgeProps["variant"]>, string> = {
   success: "bg-success-500",
   warning: "bg-warning-500",
   danger: "bg-error-500",
-  info: "bg-blue-500",
+  info: "bg-info-500",
   outline: "bg-text-secondary",
 };
 

@@ -35,7 +35,7 @@ const BRAND = {
   bgCard: "#ffffff",
   url: env.FRONTEND_URL,
   get logoUrl() {
-    return `${this.url}/icons/logo.png`;
+    return `${this.url}/icons/logo-light-theme.png`;
   },
   supportEmail: "info@opportunitymakers.in",
   address: "302-Village Dhogri Road, Tehsil Nangal Salempur-1, Jalandhar, Punjab 144004",

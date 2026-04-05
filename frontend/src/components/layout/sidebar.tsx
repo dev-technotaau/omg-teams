@@ -34,6 +34,7 @@ import {
   Webhook,
   Activity,
 } from "lucide-react";
+import { useTheme } from "next-themes";
 import { useAuth } from "@/contexts/auth";
 import { useUIStore } from "@/store/ui";
 import { cn } from "@/lib/utils";
@@ -166,6 +167,7 @@ const NAV_ITEMS: NavItem[] = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const { theme } = useTheme();
   const { user } = useAuth();
   const { sidebarOpen, toggleSidebar } = useUIStore();
   const isMobile = useIsMobile();
@@ -223,13 +225,13 @@ export function Sidebar() {
         )}
       >
         {/* Logo + Brand */}
-        <div className="flex h-14 items-center justify-between border-b border-white/10 px-3">
+        <div className="flex h-14 items-center justify-between border-b border-border-sidebar px-3">
           <Link href="/" className="min-w-0 flex-1 overflow-hidden">
             {sidebarOpen ? (
               /* Expanded: show full wide logo (emblem + company name + tagline) */
               /* eslint-disable-next-line @next/next/no-img-element */
               <img
-                src="/icons/logo.png"
+                src={theme === "dark" ? "/icons/logo.png" : "/icons/logo-light-theme.png"}
                 alt="OMG Teams"
                 className="h-10 w-auto object-contain"
                 onError={(e) => {
@@ -239,15 +241,18 @@ export function Sidebar() {
                 }}
               />
             ) : (
-              /* Collapsed: show just the first letter or a small cropped version */
-              <span className="text-text-sidebar-active flex h-8 w-8 items-center justify-center rounded bg-white/10 text-sm font-bold">
-                O
-              </span>
+              /* Collapsed: show square logo icon */
+              /* eslint-disable-next-line @next/next/no-img-element */
+              <img
+                src={theme === "dark" ? "/icons/logo-collapsed.png" : "/icons/logo-collapsed-light-theme.png"}
+                alt="OMG"
+                className="h-8 w-8 object-contain"
+              />
             )}
           </Link>
           <button
             onClick={toggleSidebar}
-            className="text-text-sidebar hover:text-text-sidebar-active shrink-0 rounded-sm p-1 hover:bg-white/10"
+            className="text-text-sidebar hover:text-text-sidebar-active shrink-0 rounded-sm p-1 hover:bg-bg-hover"
           >
             {sidebarOpen ? <ChevronLeft size={18} /> : <ChevronRight size={18} />}
           </button>
@@ -268,7 +273,7 @@ export function Sidebar() {
                   "mx-2 my-0.5 flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
                   isActive
                     ? "bg-primary-500/20 text-text-sidebar-active font-medium"
-                    : "text-text-sidebar hover:text-text-sidebar-active hover:bg-white/10",
+                    : "text-text-sidebar hover:text-text-sidebar-active hover:bg-bg-hover",
                 )}
               >
                 <Icon size={18} className="shrink-0" />
@@ -286,7 +291,7 @@ export function Sidebar() {
 
         {/* User info at bottom */}
         {sidebarOpen && user && (
-          <div className="border-t border-white/10 p-4">
+          <div className="border-t border-border-sidebar p-4">
             <p className="text-text-sidebar truncate text-xs">{user.name}</p>
             <p className="text-text-muted truncate text-xs">{user.role.replace("_", " ")}</p>
           </div>

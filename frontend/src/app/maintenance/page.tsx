@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Settings, Wrench, RefreshCw, Mail, Clock } from "lucide-react";
+import { Settings, Wrench, RefreshCw, Mail, Clock, Sun, Moon } from "lucide-react";
+import { useTheme } from "next-themes";
 import { useMaintenanceStore } from "@/store/maintenance";
 
 // ──────────────────────────────────────────────
@@ -39,6 +40,7 @@ export default function MaintenancePage(props: MaintenancePageProps = {}) {
   const storeMessage = useMaintenanceStore((s) => s.message);
   const storeReturnTime = useMaintenanceStore((s) => s.estimatedReturnTime);
 
+  const { theme, setTheme } = useTheme();
   const message = props.message || storeMessage;
   const estimatedReturnTime = props.estimatedReturnTime || storeReturnTime;
 
@@ -135,6 +137,16 @@ export default function MaintenancePage(props: MaintenancePageProps = {}) {
 
   return (
     <div className="bg-bg-page relative flex min-h-screen items-center justify-center overflow-hidden">
+      {/* Theme toggle — top right corner */}
+      <button
+        type="button"
+        onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+        className="text-text-secondary hover:text-text-primary hover:bg-bg-hover fixed top-4 right-4 z-50 rounded-lg p-2 transition-colors"
+        aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+      >
+        {theme === "dark" ? <Sun size={20} /> : <Moon size={20} />}
+      </button>
+
       {/* Animated background orbs */}
       <motion.div
         className="from-primary-500/20 pointer-events-none absolute -top-32 -left-32 h-96 w-96 rounded-full bg-linear-to-br to-blue-500/10 blur-3xl"

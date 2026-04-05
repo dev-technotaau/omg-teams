@@ -138,7 +138,15 @@
       "Bash(grep -oE '[a-z][-a-z/]+$')",
       "Bash(npm ls:*)",
       "Bash(ls d:/Projects/OMG_Teams/frontend/public/sw* d:/Projects/OMG_Teams/frontend/public/workbox*)",
-      "Bash(npx next:*)"
+      "Bash(npx next:*)",
+      "Bash(ls d:/Projects/OMG_Teams/backend/node_modules/prisma/config*)",
+      "Bash(ls d:/Projects/OMG_Teams/frontend/src/app/manifest*)",
+      "Bash(ls d:/Projects/OMG_Teams/frontend/src/app/icon* d:/Projects/OMG_Teams/frontend/src/app/favicon* d:/Projects/OMG_Teams/frontend/src/app/apple*)",
+      "Bash(curl -s https://teams.opportunitymakers.in/manifest.webmanifest)",
+      "Bash(find d:\\\\Projects\\\\OMG_Teams\\\\frontend\\\\src -type f \\\\\\( -name \"*.tsx\" -o -name \"*.ts\" \\\\\\) -exec grep -l \"bg-\\\\|text-\\\\|border-\" {} \\\\;)",
+      "Bash(read c:*)",
+      "Bash(grep -v \"//.*bg-\")",
+      "Bash(grep -v \"node_modules\\\\|//.*text-\")"
     ]
   }
 }

@@ -110,7 +110,7 @@ export function Tooltip({ content, side = "top", children, delay = 200 }: Toolti
             ref={tooltipRef}
             role="tooltip"
             className={cn(
-              "animate-fade-in bg-bg-sidebar pointer-events-none absolute z-200 max-w-xs rounded-md px-2.5 py-1.5 text-xs text-white shadow-lg",
+              "animate-fade-in bg-bg-tooltip pointer-events-none absolute z-200 max-w-xs rounded-md px-2.5 py-1.5 text-xs text-white shadow-lg",
             )}
             style={coords ? { top: coords.top, left: coords.left } : { top: -9999, left: -9999 }}
           >

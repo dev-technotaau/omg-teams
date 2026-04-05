@@ -122,7 +122,7 @@ const STREAK_DOT_CLASSES: Record<StreakDay["status"], string> = {
   ABSENT: "bg-error-500",
   ON_LEAVE: "bg-info-500",
   WEEKEND: "bg-bg-muted",
-  FUTURE: "bg-bg-subtle",
+  FUTURE: "bg-bg-muted",
 };
 
 const STREAK_LABEL: Record<StreakDay["status"], string> = {

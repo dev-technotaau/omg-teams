@@ -88,13 +88,23 @@ function buildCsp(nonce: string): string {
       "https://stats.g.doubleclick.net",
     );
   }
-  if (fbPixelId) connectSources.push("https://www.facebook.com");
+  if (fbPixelId)
+    connectSources.push(
+      "https://www.facebook.com",
+      "https://*.facebook.com",
+      "https://*.birch.events",
+    );
   // Vercel Analytics + Speed Insights
-  connectSources.push("https://va.vercel-scripts.com", "https://vitals.vercel-insights.com");
+  connectSources.push(
+    "https://va.vercel-scripts.com",
+    "https://vitals.vercel-insights.com",
+    "https://*.awsapprunner.com",
+  );
 
   // ── frame-src ──
   const frameSources = ["'self'"];
   frameSources.push("https://challenges.cloudflare.com"); // Turnstile CAPTCHA
+  frameSources.push("https://vercel.live"); // Vercel preview toolbar
   if (gtmId) frameSources.push("https://www.googletagmanager.com");
 
   const directives = [
@@ -192,7 +202,7 @@ export function proxy(request: NextRequest): NextResponse {
 
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|sitemap.xml|robots.txt|api|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|mp3|wav)$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|sitemap.xml|robots.txt|manifest.webmanifest|sw.js|api|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|mp3|wav)$).*)",
   ],
 };
 

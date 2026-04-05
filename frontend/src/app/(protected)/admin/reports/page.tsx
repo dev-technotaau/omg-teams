@@ -68,16 +68,16 @@ import { DEFAULT_LARGE_PAGE_SIZE } from "@/constants/pagination";
 type DateTab = "today" | "yesterday" | "this_week" | "this_month" | "custom" | "all";
 
 const STAGE_OPTIONS = [
-  { label: "Sourced", value: "SOURCED", color: "bg-blue-100 text-blue-700" },
-  { label: "Screened", value: "SCREENED", color: "bg-indigo-100 text-indigo-700" },
-  { label: "CV Shared", value: "CV_SHARED", color: "bg-violet-100 text-violet-700" },
-  { label: "Interview", value: "INTERVIEW_SCHEDULED", color: "bg-purple-100 text-purple-700" },
-  { label: "Selected", value: "SELECTED", color: "bg-emerald-100 text-emerald-700" },
-  { label: "Joined", value: "JOINED", color: "bg-green-100 text-green-700" },
-  { label: "Invoiced", value: "INVOICED", color: "bg-teal-100 text-teal-700" },
-  { label: "Closed", value: "CLOSED", color: "bg-gray-100 text-gray-700" },
-  { label: "Rejected", value: "REJECTED", color: "bg-red-100 text-red-700" },
-  { label: "On Hold", value: "ON_HOLD", color: "bg-amber-100 text-amber-700" },
+  { label: "Sourced", value: "SOURCED", color: "bg-info-100 text-info-700" },
+  { label: "Screened", value: "SCREENED", color: "bg-primary-100 text-primary-700" },
+  { label: "CV Shared", value: "CV_SHARED", color: "bg-secondary-100 text-secondary-700" },
+  { label: "Interview", value: "INTERVIEW_SCHEDULED", color: "bg-warning-100 text-warning-700" },
+  { label: "Selected", value: "SELECTED", color: "bg-success-100 text-success-700" },
+  { label: "Joined", value: "JOINED", color: "bg-success-50 text-success-700" },
+  { label: "Invoiced", value: "INVOICED", color: "bg-primary-50 text-primary-700" },
+  { label: "Closed", value: "CLOSED", color: "bg-bg-muted text-text-secondary" },
+  { label: "Rejected", value: "REJECTED", color: "bg-error-100 text-error-700" },
+  { label: "On Hold", value: "ON_HOLD", color: "bg-warning-50 text-warning-700" },
 ];
 
 const STAGE_COLOR_MAP: Record<string, string> = Object.fromEntries(

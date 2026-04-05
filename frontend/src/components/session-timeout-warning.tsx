@@ -36,11 +36,11 @@ export function SessionTimeoutWarning() {
 
   return (
     <div className="fixed inset-0 z-9999 flex items-center justify-center bg-black/50">
-      <div className="mx-4 w-full max-w-md rounded-lg bg-white p-6 shadow-xl">
-        <h2 className="mb-2 text-lg font-semibold text-gray-900">Session Expiring Soon</h2>
-        <p className="mb-4 text-sm text-gray-600">
+      <div className="bg-bg-surface mx-4 w-full max-w-md rounded-lg p-6 shadow-xl">
+        <h2 className="text-text-primary mb-2 text-lg font-semibold">Session Expiring Soon</h2>
+        <p className="text-text-secondary mb-4 text-sm">
           Your session will expire in{" "}
-          <span className="font-mono font-bold text-amber-600">{timeDisplay}</span> due to
+          <span className="text-warning-600 font-mono font-bold">{timeDisplay}</span> due to
           inactivity. Click below to stay logged in.
         </p>
         <div className="flex gap-3">
@@ -52,7 +52,7 @@ export function SessionTimeoutWarning() {
           </button>
           <button
             onClick={handleExpired}
-            className="focus:ring-primary-500 rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:ring-2 focus:ring-offset-2 focus:outline-hidden"
+            className="focus:ring-primary-500 border-border-default text-text-secondary hover:bg-bg-hover rounded-md border px-4 py-2 text-sm font-medium focus:ring-2 focus:ring-offset-2 focus:outline-hidden"
           >
             Log Out
           </button>

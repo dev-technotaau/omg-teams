@@ -57,7 +57,7 @@ export async function prefetchLogo(): Promise<void> {
   logoFetched = true;
   try {
     const { env } = await import("../../config/env.js");
-    const url = `${env.FRONTEND_URL}/icons/logo.png`;
+    const url = `${env.FRONTEND_URL}/icons/logo-light-theme.png`;
     const res = await fetch(url);
     if (res.ok) {
       cachedLogoBuffer = Buffer.from(await res.arrayBuffer());

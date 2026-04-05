@@ -7,6 +7,8 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import axios from "axios";
+import { Sun, Moon } from "lucide-react";
+import { useTheme } from "next-themes";
 import { extractApiError } from "@/lib/api";
 import { getDeviceId } from "@/lib/device-id";
 import { Turnstile } from "@/components/common/turnstile";
@@ -158,13 +160,25 @@ export default function LoginPage() {
   const identifierLabel = activeTab === "ADMIN" ? "Email" : "Employee ID";
   const identifierPlaceholder = activeTab === "ADMIN" ? "admin@example.com" : "OMG-0001";
 
+  const { theme, setTheme } = useTheme();
+
   return (
     <div className="bg-background flex min-h-screen items-center justify-center px-4">
+      {/* Theme toggle — top right corner */}
+      <button
+        type="button"
+        onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+        className="text-text-secondary hover:text-text-primary hover:bg-bg-hover fixed top-4 right-4 z-50 rounded-lg p-2 transition-colors"
+        aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+      >
+        {theme === "dark" ? <Sun size={20} /> : <Moon size={20} />}
+      </button>
+
       <div className="w-full max-w-md">
         {/* Logo / Branding */}
         <div className="mb-8 flex justify-center">
           <Image
-            src="/icons/logo.png"
+            src={theme === "dark" ? "/icons/logo.png" : "/icons/logo-light-theme.png"}
             alt="Opportunity Makers Group"
             width={280}
             height={70}
@@ -182,7 +196,7 @@ export default function LoginPage() {
                 type="button"
                 onClick={() => onTabChange(tab.key)}
                 className={cn(
-                  "flex-1 py-2.5 text-sm font-medium transition-colors",
+                  "flex-1 px-3 py-2.5 text-sm font-medium whitespace-nowrap transition-colors",
                   activeTab === tab.key
                     ? "bg-primary text-primary-foreground"
                     : "text-muted-foreground hover:bg-muted bg-transparent",
@@ -268,7 +282,7 @@ export default function LoginPage() {
                   onChange={(e) => setBackupCode(e.target.value)}
                   className={cn(
                     "w-full rounded-md border px-3 py-2 font-mono text-sm tracking-wider uppercase",
-                    "border-border bg-bg-primary",
+                    "border-border bg-bg-input",
                     "focus:border-primary focus:ring-primary/30 focus:ring-2 focus:outline-hidden",
                   )}
                   maxLength={9}

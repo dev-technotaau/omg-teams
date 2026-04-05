@@ -82,7 +82,9 @@ registerService({
 
   async connect() {
     const redis = getRedisClient();
-    await redis.connect();
+    if (redis.status === "wait") {
+      await redis.connect();
+    }
     const info = await redis.ping();
     logger.info(`Redis connected (PING: ${info})`);
   },

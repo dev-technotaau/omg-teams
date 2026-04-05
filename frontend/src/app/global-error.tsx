@@ -19,13 +19,13 @@ export default function GlobalError({
 
   return (
     <html lang="en">
-      <body className="flex min-h-screen flex-col items-center justify-center bg-white px-4 text-gray-900 dark:bg-gray-950 dark:text-gray-100">
+      <body className="bg-bg-page text-text-primary flex min-h-screen flex-col items-center justify-center px-4">
         <h1 className="text-4xl font-bold">Something went wrong</h1>
-        <p className="mt-4 text-gray-500">A critical error occurred. Please refresh the page.</p>
-        {error.digest && <p className="mt-2 text-xs text-gray-400">Error ID: {error.digest}</p>}
+        <p className="text-text-secondary mt-4">A critical error occurred. Please refresh the page.</p>
+        {error.digest && <p className="text-text-muted mt-2 text-xs">Error ID: {error.digest}</p>}
         <button
           onClick={reset}
-          className="mt-6 rounded-md bg-blue-600 px-6 py-2.5 text-sm font-medium text-white hover:bg-blue-700"
+          className="bg-primary-600 hover:bg-primary-700 mt-6 rounded-md px-6 py-2.5 text-sm font-medium text-white"
         >
           Try again
         </button>

@@ -221,11 +221,11 @@ export default function QueueDashboardPage() {
 // ──────────────────────────────────────────────
 
 const COLOR_MAP: Record<string, string> = {
-  blue: "bg-blue-50 text-blue-700",
-  amber: "bg-amber-50 text-amber-700",
-  gray: "bg-gray-50 text-gray-700",
-  green: "bg-green-50 text-green-700",
-  red: "bg-red-50 text-red-700",
+  blue: "bg-info-50 text-info-700",
+  amber: "bg-warning-50 text-warning-700",
+  gray: "bg-bg-muted text-text-secondary",
+  green: "bg-success-50 text-success-700",
+  red: "bg-error-50 text-error-700",
 };
 
 function CounterBadge({ label, count, color }: { label: string; count: number; color: string }) {

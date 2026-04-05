@@ -268,7 +268,7 @@ export function Header() {
           <Link href="/" className="shrink-0 lg:hidden">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src="/icons/logo.png"
+              src={theme === "dark" ? "/icons/logo.png" : "/icons/logo-light-theme.png"}
               alt="OMG Teams"
               className="h-8 w-auto"
               onError={(e) => {
