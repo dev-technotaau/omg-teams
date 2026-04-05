@@ -13,7 +13,8 @@ let pool: pg.Pool | undefined;
 let prisma: PrismaClient | undefined;
 
 function createPool(): pg.Pool {
-  const connectionString = env.DATABASE_DIRECT_URL || env.DATABASE_URL;
+  // At runtime, always use DATABASE_URL (pooler). DATABASE_DIRECT_URL is only for Prisma CLI migrations.
+  const connectionString = env.DATABASE_URL;
 
   const sslConfig =
     env.DATABASE_SSL_MODE === "disable"
