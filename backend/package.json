@@ -37,7 +37,7 @@
     "db:studio": "prisma studio",
     "db:format": "prisma format",
     "db:validate": "prisma validate",
-    "prepare": "cd .. && husky",
+    "prepare": "cd .. && husky || true",
     "postinstall": "npx prisma generate"
   },
   "keywords": [],
