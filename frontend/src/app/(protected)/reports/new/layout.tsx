@@ -1,0 +1,11 @@
+import type { Metadata } from "next";
+import type { ReactNode } from "react";
+
+export const metadata: Metadata = {
+  title: "Add Report",
+  description: "Submit a new candidate recruitment report",
+};
+
+export default function Layout({ children }: { children: ReactNode }) {
+  return <>{children}</>;
+}

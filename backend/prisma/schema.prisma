@@ -1,0 +1,1244 @@
+// ══════════════════════════════════════════════
+//  OMG Teams — Complete Prisma Schema
+//  42 models from Specification Section 33
+// ══════════════════════════════════════════════
+
+generator client {
+  provider        = "prisma-client-js"
+  output          = "../node_modules/.prisma/client"
+  previewFeatures = ["fullTextSearchPostgres", "relationJoins", "nativeDistinct"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ──────────────────────────────────────────────
+//  ENUMS
+// ──────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  RECRUITER
+  REPORTING_MANAGER
+}
+
+enum AccountStatus {
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum Zone {
+  NORTH
+  SOUTH
+  EAST
+  WEST
+  CENTRAL
+}
+
+enum ZoneSet {
+  SET_A // West, Central — all 33 fields
+  SET_B // East, North, South — 28 fields (fields 26-30 hidden)
+  ALL
+}
+
+enum CandidateStage {
+  SOURCED
+  SCREENED
+  CV_SHARED
+  INTERVIEW_SCHEDULED
+  SELECTED
+  JOINED
+  INVOICED
+  CLOSED
+  REJECTED    // §23.11 — Can be set from any stage
+  ON_HOLD     // §23.11 — Can be set from any stage
+}
+
+enum AttendanceStatus {
+  PRESENT_FULL
+  PRESENT_HALF
+  LATE
+  ABSENT
+  INCOMPLETE
+  ON_LEAVE
+  HOLIDAY
+  WEEKEND
+  OVERTIME
+}
+
+enum LeaveRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+  REVOKED
+}
+
+enum DocumentStatus {
+  NOT_UPLOADED
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum OfferLetterVariant {
+  TEMPLATE
+  TIPTAP_EDITOR
+}
+
+enum PaymentStatus {
+  UNPAID
+  PARTIAL
+  PAID
+  OVERDUE
+}
+
+enum HRFeedback {
+  REJECTED
+  HOLD
+  PROFILE_CLOSED
+}
+
+enum DuplicateGroupStatus {
+  PENDING
+  RESOLVED
+  DISMISSED
+}
+
+enum ReportType {
+  DAILY_RECRUITMENT_BATCH
+  DAILY_RECRUITMENT_INDIVIDUAL
+  WORK_PROFILE
+  CANDIDATE
+  RECRUITMENT
+  CANDIDATE_MIS
+  HR_FEEDBACK
+  COMPANY_SPECIFIC
+  SERVICE_PROVIDER_SPECIFIC
+  HR_SPECIFIC
+  ZONE_WISE
+  STATUS_BASED
+  PAYMENT_INVOICE
+  ATTENDANCE
+  LEAVE
+  EMPLOYEE_PERFORMANCE_ALL
+  EMPLOYEE_PERFORMANCE_RECRUITERS
+  EMPLOYEE_PERFORMANCE_RMS
+  EMPLOYEE_PERFORMANCE_INDIVIDUAL
+  CUSTOM
+}
+
+enum ReportSource {
+  ON_PAGE
+  SCHEDULED
+}
+
+enum ReportFrequency {
+  DAILY
+  MONTHLY
+  YEARLY
+}
+
+enum DeliveryStatus {
+  SUCCESS
+  FAILED
+  PENDING
+}
+
+enum TargetType {
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+enum NotificationCategory {
+  DOCUMENT
+  LEAVE
+  ATTENDANCE
+  RECRUITMENT
+  ACCOUNT
+  SYSTEM
+  REPORT
+  TARGET
+  GENERAL
+}
+
+enum DropdownCategory {
+  STATE
+  LOCATION
+  PROFILE
+  QUALIFICATION
+  NOTICE_PERIOD
+  DIPLOMA
+  CUSTOM
+}
+
+enum LeaveBalanceChangeType {
+  ALLOTTED
+  USED
+  RESTORED
+  CARRY_FORWARD
+  MANUAL_CREDIT
+  MANUAL_DEBIT
+  YEARLY_RESET
+}
+
+enum LoginMethod {
+  PASSWORD
+  BACKUP_CODE
+  PASSKEY
+}
+
+enum HalfDayPeriod {
+  FIRST_HALF
+  SECOND_HALF
+}
+
+// ══════════════════════════════════════════════
+//  33.1 USER & AUTHENTICATION (6 models)
+// ══════════════════════════════════════════════
+
+/// Core user entity — Admin, Recruiter, or Reporting Manager
+model User {
+  id                     String        @id @default(cuid())
+  employeeId             String?       @unique @map("employee_id") // OMG-XXXX, nullable for Admin
+  email                  String        @unique
+  passwordHash           String        @map("password_hash")
+  encryptedPassword      String?       @map("encrypted_password") // AES-encrypted plaintext for admin view (§6.3.3)
+  role                   Role
+  firstName              String        @map("first_name")
+  lastName               String        @map("last_name")
+  profilePhotoUrl        String?       @map("profile_photo_url")
+  profilePhotoStorageKey String?       @map("profile_photo_storage_key")
+  mobileNumber           String?       @map("mobile_number")
+  address                String?
+  deviceId               String?       @map("device_id")
+  deviceLockedAt         DateTime?     @map("device_locked_at")
+  // §11.5 — Quiet hours: no sound/browser push during these hours (e.g., "22:00"-"07:00")
+  quietHoursStart        String?       @map("quiet_hours_start") // HH:mm format, nullable = disabled
+  quietHoursEnd          String?       @map("quiet_hours_end")   // HH:mm format
+  status                 AccountStatus @default(ACTIVE)
+  createdAt              DateTime      @default(now()) @map("created_at")
+  updatedAt              DateTime      @updatedAt @map("updated_at")
+  deletedAt              DateTime?     @map("deleted_at")
+  deletedBy              String?       @map("deleted_by")
+
+  // Relations
+  sessions                   Session[]
+  devices                    UserDevice[]
+  loginHistory               LoginHistory[]
+  backupCodes                BackupCode[]
+  candidateReports           CandidateReport[]          @relation("ReportSubmitter")
+  candidateReportDrafts      CandidateReportDraft[]
+  managedRecruiters          RecruiterManagerAssignment[] @relation("Manager")
+  assignedManagers           RecruiterManagerAssignment[] @relation("Recruiter")
+  attendanceRecords          AttendanceRecord[]          @relation("AttendanceUser")
+  punchInEdits               AttendanceRecord[]          @relation("PunchInEditor")
+  punchOutEdits              AttendanceRecord[]          @relation("PunchOutEditor")
+  leaveRequests              LeaveRequest[]              @relation("LeaveApplicant")
+  actionedLeaveRequests      LeaveRequest[]              @relation("LeaveActioner")
+  leaveBalances              LeaveBalance[]
+  employeeDocuments          EmployeeDocument[]
+  offerLetters               OfferLetter[]               @relation("OfferLetterRecipient")
+  generatedOfferLetters      OfferLetter[]               @relation("OfferLetterGenerator")
+  recruiterTargets           RecruiterTarget[]            @relation("TargetRecruiter")
+  createdTargets             RecruiterTarget[]            @relation("TargetCreator")
+  notifications              Notification[]
+  notificationPreferences    NotificationPreference[]
+  pushSubscriptions          PushSubscription[]
+  verificationTokens         VerificationToken[]
+  webauthnCredentials        WebAuthnCredential[]
+  auditLogs                  AuditLog[]
+  createdHolidays            Holiday[]
+  generatedReports           GeneratedReport[]
+  stageChanges               CandidateStageHistory[]
+  resolvedDuplicateGroups    DuplicateGroup[]
+  verifiedDocuments          EmployeeDocument[]           @relation("DocumentVerifier")
+  documentHistory            EmployeeDocumentHistory[]
+  leaveBalanceChanges        LeaveBalanceHistory[]        @relation("BalanceChanger")
+  leaveRecords               LeaveRecord[]                @relation("LeaveRecordUser")
+  markedLeaveRecords         LeaveRecord[]                @relation("LeaveRecordMarker")
+
+  @@index([role])
+  @@index([status])
+  @@index([deviceId], map: "idx_user_device_id")
+  @@index([deletedAt])
+  @@map("users")
+}
+
+/// Active user sessions (Redis-backed with DB audit)
+model Session {
+  id           String    @id @default(cuid())
+  userId       String    @map("user_id")
+  token        String    @unique
+  deviceId     String    @map("device_id")
+  ipAddress    String?   @map("ip_address")
+  geoLocation  Json?     @map("geo_location")
+  userAgent    String?   @map("user_agent")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  lastActiveAt DateTime  @default(now()) @map("last_active_at")
+  revokedAt    DateTime? @map("revoked_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+  @@map("sessions")
+}
+
+/// Many-to-many RM ↔ Recruiter assignments
+model RecruiterManagerAssignment {
+  id          String    @id @default(cuid())
+  recruiterId String    @map("recruiter_id")
+  managerId   String    @map("manager_id")
+  assignedAt  DateTime  @default(now()) @map("assigned_at")
+  removedAt   DateTime? @map("removed_at")
+
+  recruiter User @relation("Recruiter", fields: [recruiterId], references: [id], onDelete: Cascade)
+  manager   User @relation("Manager", fields: [managerId], references: [id], onDelete: Cascade)
+
+  @@unique([recruiterId, managerId, removedAt], map: "uq_recruiter_manager_active")
+  @@index([recruiterId])
+  @@index([managerId])
+  @@map("recruiter_manager_assignments")
+}
+
+/// Device tracking history
+model UserDevice {
+  id         String   @id @default(cuid())
+  userId     String   @map("user_id")
+  deviceId   String   @map("device_id")
+  userAgent  String?  @map("user_agent")
+  platform   String?
+  screenSize String?  @map("screen_size")
+  lastSeen   DateTime @default(now()) @map("last_seen")
+  isActive   Boolean  @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([deviceId])
+  @@map("user_devices")
+}
+
+/// Login attempt audit log
+model LoginHistory {
+  id              String      @id @default(cuid())
+  userId          String?     @map("user_id")
+  attemptedId     String?     @map("attempted_id") // Employee ID or email attempted
+  attemptedDeviceId String?   @map("attempted_device_id")
+  ip              String?
+  userAgent       String?     @map("user_agent")
+  success         Boolean
+  failureReason   String?     @map("failure_reason")
+  loginMethod     LoginMethod @default(PASSWORD) @map("login_method")
+  createdAt       DateTime    @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("login_history")
+}
+
+/// Emergency device lock bypass codes (10 per user)
+model BackupCode {
+  id        String    @id @default(cuid())
+  userId    String    @map("user_id")
+  codeHash  String    @map("code_hash")
+  isUsed    Boolean   @default(false) @map("is_used")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("backup_codes")
+}
+
+/// Verification tokens for email change, password reset, OTP flows
+model VerificationToken {
+  id        String             @id @default(cuid())
+  userId    String             @map("user_id")
+  type      VerificationType
+  token     String             // Hashed OTP or token
+  payload   String?            // E.g., new email address for EMAIL_CHANGE
+  expiresAt DateTime           @map("expires_at")
+  usedAt    DateTime?          @map("used_at")
+  createdAt DateTime           @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+  @@index([expiresAt])
+  @@map("verification_tokens")
+}
+
+enum VerificationType {
+  EMAIL_CHANGE
+  PASSWORD_RESET
+}
+
+/// WebAuthn / Passkey credentials for passwordless authentication
+model WebAuthnCredential {
+  id                  String   @id @default(cuid())
+  userId              String   @map("user_id")
+  credentialId        String   @unique @map("credential_id")
+  credentialPublicKey Bytes    @map("credential_public_key")
+  counter             Int      @default(0)
+  transports          String[] @default([])
+  deviceName          String?  @map("device_name")
+  createdAt           DateTime @default(now()) @map("created_at")
+  lastUsedAt          DateTime? @map("last_used_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("webauthn_credentials")
+}
+
+// ══════════════════════════════════════════════
+//  33.2 BUSINESS ENTITIES (3 models)
+// ══════════════════════════════════════════════
+
+/// External client companies
+model Company {
+  id        String    @id @default(cuid())
+  name      String
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+  deletedBy String?   @map("deleted_by")
+
+  serviceProviders ServiceProvider[]
+  hrManagers       HRManager[]
+  candidateReports CandidateReport[]
+
+  @@index([deletedAt])
+  @@index([name], map: "idx_company_name")
+  @@map("companies")
+}
+
+/// Service providers under a Company
+model ServiceProvider {
+  id        String    @id @default(cuid())
+  name      String
+  companyId String    @map("company_id")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+  deletedBy String?   @map("deleted_by")
+
+  company          Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  candidateReports CandidateReport[]
+
+  @@index([companyId])
+  @@index([deletedAt])
+  @@map("service_providers")
+}
+
+/// HR managers under a Company
+model HRManager {
+  id        String    @id @default(cuid())
+  name      String
+  companyId String    @map("company_id")
+  email     String?
+  phone     String?
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+  deletedBy String?   @map("deleted_by")
+
+  company          Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  candidateReports CandidateReport[]
+
+  @@index([companyId])
+  @@index([deletedAt])
+  @@map("hr_managers")
+}
+
+// ══════════════════════════════════════════════
+//  33.3 CANDIDATE & RECRUITMENT (7 models)
+// ══════════════════════════════════════════════
+
+/// Core candidate record — 33 recruiter fields + 15 admin-only fields
+model CandidateReport {
+  id                 String          @id @default(cuid())
+  globalSerialNumber Int             @default(autoincrement()) @map("global_serial_number")
+  recruiterId        String          @map("recruiter_id")
+  zone               Zone
+
+  // Recruiter fields (1-33)
+  dateSourced        DateTime?       @map("date_sourced")
+  candidateName      String?         @map("candidate_name")
+  contactNo          String?         @map("contact_no")
+  state              String?
+  location           String?
+  profile            String?
+  yearsOfExperience  Float?          @map("years_of_experience")
+  currentCtc         Float?          @map("current_ctc")
+  currentDesignation String?         @map("current_designation")
+  currentOrganization String?        @map("current_organization")
+  emailId            String?         @map("email_id")
+  higherQualification String?        @map("higher_qualification")
+  expectedCtc        Float?          @map("expected_ctc")
+  diplomaPartFull    String?         @map("diploma_part_full")
+  graduationPercent  Float?          @map("graduation_percent")
+  graduationYear     Int?            @map("graduation_year")
+  twelfthPassingYear Int?            @map("twelfth_passing_year")
+  twelfthPercent     Float?          @map("twelfth_percent")
+  tenthPassingYear   Int?            @map("tenth_passing_year")
+  tenthPercent       Float?          @map("tenth_percent")
+  dateOfBirth        DateTime?       @map("date_of_birth")
+  noticePeriod       String?         @map("notice_period")
+  remarks            String?
+
+  // Zone-conditional fields (Set A only: West, Central)
+  isCtcInformed      Boolean?        @map("is_ctc_informed")
+  isOffRollOkay      Boolean?        @map("is_off_roll_okay")
+  isOnRollExplained  Boolean?        @map("is_on_roll_explained")
+  hasTwoWheeler      Boolean?        @map("has_two_wheeler")
+  communicationSkill Int?            @map("communication_skill") // 1-10
+
+  status             String?         @default("PENDING") // Complete / Pending
+
+  // Admin-only fields (34-48)
+  companyId          String?         @map("company_id")
+  serviceProviderId  String?         @map("service_provider_id")
+  hrManagerId        String?         @map("hr_manager_id")
+  adminLocation      String?         @map("admin_location")
+  adminState         String?         @map("admin_state")
+  dateOfJoining      DateTime?       @map("date_of_joining")
+  invoiceDate        DateTime?       @map("invoice_date")
+  invoiceNumber      String?         @unique @map("invoice_number")
+  invoiceAmountTotal Float?          @map("invoice_amount_total")
+  gstAmount          Float?          @map("gst_amount")
+  amountReceived     Float?          @map("amount_received")
+  tdsAmount          Float?          @map("tds_amount")
+  paymentStatus      PaymentStatus?  @map("payment_status")
+  paymentDate        DateTime?       @map("payment_date")
+  cvSharedOnDate     DateTime?       @map("cv_shared_on_date")
+  hrFeedback         HRFeedback?     @map("hr_feedback")
+
+  // Pipeline
+  candidateStage     CandidateStage  @default(SOURCED) @map("candidate_stage")
+  isDuplicate        Boolean         @default(false) @map("is_duplicate")
+  duplicateGroupId   String?         @map("duplicate_group_id")
+
+  // Timestamps
+  createdAt          DateTime        @default(now()) @map("created_at")
+  updatedAt          DateTime        @updatedAt @map("updated_at")
+  deletedAt          DateTime?       @map("deleted_at")
+  deletedBy          String?         @map("deleted_by")
+
+  // Relations
+  recruiter       User                    @relation("ReportSubmitter", fields: [recruiterId], references: [id], onDelete: Restrict)
+  company         Company?                @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  serviceProvider ServiceProvider?        @relation(fields: [serviceProviderId], references: [id], onDelete: SetNull)
+  hrManager       HRManager?              @relation(fields: [hrManagerId], references: [id], onDelete: SetNull)
+  duplicateGroup  DuplicateGroup?         @relation(fields: [duplicateGroupId], references: [id], onDelete: SetNull)
+  stageHistory    CandidateStageHistory[]
+  duplicateMembers DuplicateGroupMember[]
+  invoices         Invoice[]
+
+  @@index([recruiterId])
+  @@index([companyId])
+  @@index([zone])
+  @@index([candidateStage])
+  @@index([contactNo], map: "idx_candidate_contact")
+  @@index([emailId], map: "idx_candidate_email")
+  @@index([createdAt])
+  @@index([deletedAt])
+  @@index([recruiterId, createdAt])
+  @@index([createdAt, deletedAt])
+  @@index([status, createdAt])
+  @@index([companyId, status], map: "idx_candidate_company_status")
+  // §24.15 — Additional composite indexes
+  @@index([companyId, createdAt], map: "idx_candidate_company_date")
+  @@index([zone, createdAt], map: "idx_candidate_zone_date")
+  @@index([recruiterId, candidateStage], map: "idx_candidate_recruiter_stage")
+  @@map("candidate_reports")
+}
+
+/// Invoices linked to candidate reports
+model Invoice {
+  id                  String        @id @default(cuid())
+  candidateReportId   String        @map("candidate_report_id")
+  invoiceNumber       String        @unique @map("invoice_number")
+  invoiceDate         DateTime      @map("invoice_date") @db.Date
+  amountTotal         Float         @map("amount_total")
+  gstAmount           Float?        @map("gst_amount")
+  tdsAmount           Float?        @map("tds_amount")
+  amountReceived      Float?        @map("amount_received")
+  paymentStatus       PaymentStatus @default(UNPAID) @map("payment_status")
+  paymentDate         DateTime?     @map("payment_date")
+  notes               String?
+  createdAt           DateTime      @default(now()) @map("created_at")
+  updatedAt           DateTime      @updatedAt @map("updated_at")
+
+  candidateReport CandidateReport @relation(fields: [candidateReportId], references: [id], onDelete: Cascade)
+
+  @@index([candidateReportId])
+  @@index([paymentStatus])
+  @@index([invoiceDate])
+  @@map("invoices")
+}
+
+/// Auto-save drafts for in-progress report forms
+model CandidateReportDraft {
+  id          String   @id @default(cuid())
+  recruiterId String   @map("recruiter_id")
+  zone        Zone?
+  formData    Json     @map("form_data")
+  lastSavedAt DateTime @default(now()) @map("last_saved_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  recruiter User @relation(fields: [recruiterId], references: [id], onDelete: Cascade)
+
+  @@unique([recruiterId])
+  @@map("candidate_report_drafts")
+}
+
+/// Pipeline stage transition history
+model CandidateStageHistory {
+  id                String         @id @default(cuid())
+  candidateReportId String         @map("candidate_report_id")
+  fromStage         CandidateStage @map("from_stage")
+  toStage           CandidateStage @map("to_stage")
+  changedByUserId   String         @map("changed_by_user_id")
+  changedAt         DateTime       @default(now()) @map("changed_at")
+  notes             String?
+
+  candidateReport CandidateReport @relation(fields: [candidateReportId], references: [id], onDelete: Cascade)
+  changedBy       User            @relation(fields: [changedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([candidateReportId])
+  @@map("candidate_stage_history")
+}
+
+/// Duplicate candidate groups
+model DuplicateGroup {
+  id             String               @id @default(cuid())
+  detectedAt     DateTime             @default(now()) @map("detected_at")
+  status         DuplicateGroupStatus @default(PENDING)
+  resolvedAt     DateTime?            @map("resolved_at")
+  resolvedByUserId String?            @map("resolved_by_user_id")
+
+  resolvedBy User?                  @relation(fields: [resolvedByUserId], references: [id], onDelete: SetNull)
+  members    DuplicateGroupMember[]
+  candidates CandidateReport[]
+
+  @@map("duplicate_groups")
+}
+
+/// Members of a duplicate group
+model DuplicateGroupMember {
+  id                String @id @default(cuid())
+  duplicateGroupId  String @map("duplicate_group_id")
+  candidateReportId String @map("candidate_report_id")
+
+  group     DuplicateGroup  @relation(fields: [duplicateGroupId], references: [id], onDelete: Cascade)
+  candidate CandidateReport @relation(fields: [candidateReportId], references: [id], onDelete: Cascade)
+
+  @@unique([duplicateGroupId, candidateReportId])
+  @@map("duplicate_group_members")
+}
+
+// ══════════════════════════════════════════════
+//  33.4 NOTIFICATIONS (3 models)
+// ══════════════════════════════════════════════
+
+/// In-app notifications
+model Notification {
+  id        String               @id @default(cuid())
+  userId    String               @map("user_id")
+  type      NotificationCategory
+  title     String
+  message   String
+  actionUrl String?              @map("action_url")
+  metadata  Json?
+  isRead    Boolean              @default(false) @map("is_read")
+  isCleared Boolean              @default(false) @map("is_cleared")
+  readAt    DateTime?            @map("read_at")
+  clearedAt DateTime?            @map("cleared_at")
+  createdAt DateTime             @default(now()) @map("created_at")
+  expiresAt DateTime?            @map("expires_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+  @@index([userId, createdAt])
+  @@index([userId, isRead, isCleared, createdAt], map: "idx_notification_unread_query")
+  @@index([expiresAt], map: "idx_notification_expiry")
+  @@map("notifications")
+}
+
+/// Per-user notification settings
+model NotificationPreference {
+  id                  String               @id @default(cuid())
+  userId              String               @map("user_id")
+  category            NotificationCategory
+  isEnabled           Boolean              @default(true) @map("is_enabled")
+  emailEnabled        Boolean              @default(true) @map("email_enabled")
+  soundEnabled        Boolean              @default(true) @map("sound_enabled")
+  browserPushEnabled  Boolean              @default(false) @map("browser_push_enabled")
+  updatedAt           DateTime             @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, category])
+  @@map("notification_preferences")
+}
+
+/// Push notification subscriptions (FCM tokens + Web Push endpoints)
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  endpoint  String   // FCM token or Web Push endpoint URL
+  type      PushType @default(FCM) // FCM or WEB_PUSH
+  deviceId  String?  @map("device_id") // Correlate with UserDevice
+  userAgent String?  @map("user_agent")
+  /// Web Push subscription keys (p256dh + auth) — JSON, null for FCM
+  keys      Json?
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, endpoint])
+  @@index([userId])
+  @@map("push_subscriptions")
+}
+
+enum PushType {
+  FCM
+  WEB_PUSH
+}
+
+// ══════════════════════════════════════════════
+//  33.5 REPORTS & SCHEDULING (4 models)
+// ══════════════════════════════════════════════
+
+/// Every generated report file
+model GeneratedReport {
+  id              String       @id @default(cuid())
+  reportType      ReportType   @map("report_type")
+  reportName      String       @map("report_name")
+  source          ReportSource
+  filters         Json?
+  generatedAt     DateTime     @default(now()) @map("generated_at")
+  fileSize        Int?         @map("file_size")
+  cloudUrl        String?      @map("cloud_url")
+  cloudStorageKey String?      @map("cloud_storage_key")
+  expiresAt       DateTime?    @map("expires_at")
+  isExpired       Boolean      @default(false) @map("is_expired")
+  createdByUserId String?      @map("created_by_user_id")
+
+  createdBy    User?              @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  deliveryLogs ReportDeliveryLog[]
+
+  @@index([reportType])
+  @@index([generatedAt])
+  @@index([generatedAt, reportType])
+  @@map("generated_reports")
+}
+
+/// Scheduled email report definitions
+model ScheduledReportConfig {
+  id          String          @id @default(cuid())
+  reportType  ReportType      @map("report_type")
+  reportName  String          @map("report_name")
+  filters     Json?
+  frequency   ReportFrequency
+  timing      Json?                           // { hour, minute, dayOfMonth, monthOfYear }
+  isActive    Boolean         @default(true)   @map("is_active")
+  createdAt   DateTime        @default(now())  @map("created_at")
+  updatedAt   DateTime        @updatedAt       @map("updated_at")
+
+  recipients   ScheduledReportRecipient[]
+  deliveryLogs ReportDeliveryLog[]
+
+  @@map("scheduled_report_configs")
+}
+
+/// Recipients per scheduled report
+model ScheduledReportRecipient {
+  id                    String    @id @default(cuid())
+  scheduledReportConfigId String  @map("scheduled_report_config_id")
+  email                 String
+  addedAt               DateTime  @default(now()) @map("added_at")
+  removedAt             DateTime? @map("removed_at")
+
+  config ScheduledReportConfig @relation(fields: [scheduledReportConfigId], references: [id], onDelete: Cascade)
+
+  @@index([scheduledReportConfigId])
+  @@map("scheduled_report_recipients")
+}
+
+/// Email delivery tracking
+model ReportDeliveryLog {
+  id                    String         @id @default(cuid())
+  generatedReportId     String?        @map("generated_report_id")
+  scheduledReportConfigId String?      @map("scheduled_report_config_id")
+  recipientEmail        String         @map("recipient_email")
+  sentAt                DateTime?      @map("sent_at")
+  deliveryStatus        DeliveryStatus @default(PENDING) @map("delivery_status")
+  failureReason         String?        @map("failure_reason")
+
+  generatedReport GeneratedReport?      @relation(fields: [generatedReportId], references: [id], onDelete: SetNull)
+  scheduledConfig ScheduledReportConfig? @relation(fields: [scheduledReportConfigId], references: [id], onDelete: SetNull)
+
+  @@index([generatedReportId])
+  @@index([deliveryStatus])
+  @@map("report_delivery_logs")
+}
+
+// ══════════════════════════════════════════════
+//  33.6 ATTENDANCE (3 models)
+// ══════════════════════════════════════════════
+
+/// Daily attendance per employee
+model AttendanceRecord {
+  id                   String           @id @default(cuid())
+  userId               String           @map("user_id")
+  date                 DateTime         @db.Date
+  punchInTime          DateTime?        @map("punch_in_time")
+  punchOutTime         DateTime?        @map("punch_out_time")
+  leaveLoginAt         DateTime?        @map("leave_login_at") // Login on approved leave day (audit only)
+  grossWorkingMinutes  Int?             @map("gross_working_minutes")
+  netWorkingMinutes    Int?             @map("net_working_minutes")
+  overtimeMinutes      Int?             @map("overtime_minutes")
+  status               AttendanceStatus @default(ABSENT)
+  isLate               Boolean          @default(false) @map("is_late")
+  lateByMinutes        Int?             @map("late_by_minutes")
+  midnightResetApplied Boolean          @default(false) @map("midnight_reset_applied")
+  punchInEditedBy      String?          @map("punch_in_edited_by")
+  punchOutEditedBy     String?          @map("punch_out_edited_by")
+  remarks              String?
+  createdAt            DateTime         @default(now()) @map("created_at")
+  updatedAt            DateTime         @updatedAt @map("updated_at")
+
+  user           User  @relation("AttendanceUser", fields: [userId], references: [id], onDelete: Cascade)
+  punchInEditor  User? @relation("PunchInEditor", fields: [punchInEditedBy], references: [id], onDelete: SetNull)
+  punchOutEditor User? @relation("PunchOutEditor", fields: [punchOutEditedBy], references: [id], onDelete: SetNull)
+
+  @@unique([userId, date])
+  @@index([userId])
+  @@index([date])
+  @@index([status])
+  @@map("attendance_records")
+}
+
+/// Platform-wide holidays
+model Holiday {
+  id          String   @id @default(cuid())
+  date        DateTime @db.Date
+  name        String
+  type        String   @default("CUSTOM") // NATIONAL, REGIONAL, CUSTOM
+  isRecurring Boolean  @default(false) @map("is_recurring")
+  createdBy   String?  @map("created_by")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  creator User? @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+
+  @@unique([date])
+  @@map("holidays")
+}
+
+/// Attendance settings (key-value)
+model AttendanceConfig {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     Json
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("attendance_config")
+}
+
+// ══════════════════════════════════════════════
+//  33.7 LEAVE MANAGEMENT (5 models)
+// ══════════════════════════════════════════════
+
+/// Leave type definitions
+model LeaveType {
+  id                       String   @id @default(cuid())
+  name                     String
+  code                     String   @unique
+  description              String?
+  isPaid                   Boolean  @default(true) @map("is_paid")
+  isActive                 Boolean  @default(true) @map("is_active")
+  requiresDocument         Boolean  @default(false) @map("requires_document")
+  requiresDocumentAfterDays Int?    @map("requires_document_after_days")
+  maxConsecutiveDays       Int?     @map("max_consecutive_days")
+  advanceNoticeDays        Int?     @map("advance_notice_days")
+  createdAt                DateTime @default(now()) @map("created_at")
+  updatedAt                DateTime @updatedAt @map("updated_at")
+
+  leaveRequests LeaveRequest[]
+  leaveBalances LeaveBalance[]
+
+  @@map("leave_types")
+}
+
+/// Employee leave requests
+model LeaveRequest {
+  id                    String             @id @default(cuid())
+  userId                String             @map("user_id")
+  leaveTypeId           String             @map("leave_type_id")
+  startDate             DateTime           @map("start_date") @db.Date
+  endDate               DateTime           @map("end_date") @db.Date
+  isHalfDay             Boolean            @default(false) @map("is_half_day")
+  halfDayPeriod         HalfDayPeriod?     @map("half_day_period")
+  numberOfDays          Float              @map("number_of_days")
+  reason                String
+  supportingDocumentUrl String?            @map("supporting_document_url")
+  emergencyContact      String?            @map("emergency_contact")
+  status                LeaveRequestStatus @default(PENDING)
+  rejectionReason       String?            @map("rejection_reason")
+  revocationReason      String?            @map("revocation_reason")
+  actionedBy            String?            @map("actioned_by")
+  actionedAt            DateTime?          @map("actioned_at")
+  createdAt             DateTime           @default(now()) @map("created_at")
+  updatedAt             DateTime           @updatedAt @map("updated_at")
+
+  user      User      @relation("LeaveApplicant", fields: [userId], references: [id], onDelete: Cascade)
+  leaveType LeaveType @relation(fields: [leaveTypeId], references: [id], onDelete: Restrict)
+  actioner  User?     @relation("LeaveActioner", fields: [actionedBy], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([status])
+  @@index([startDate, endDate])
+  @@map("leave_requests")
+}
+
+/// Per-employee per-type per-year balance
+model LeaveBalance {
+  id               String   @id @default(cuid())
+  userId           String   @map("user_id")
+  leaveTypeId      String   @map("leave_type_id")
+  year             Int
+  totalAllotted    Float    @default(0) @map("total_allotted")
+  carriedForward   Float    @default(0) @map("carried_forward")
+  manualAdjustment Float    @default(0) @map("manual_adjustment")
+  used             Float    @default(0)
+  remaining        Float    @default(0)
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  leaveType LeaveType @relation(fields: [leaveTypeId], references: [id], onDelete: Restrict)
+  history   LeaveBalanceHistory[]
+
+  @@unique([userId, leaveTypeId, year])
+  @@map("leave_balances")
+}
+
+/// Balance change audit trail
+model LeaveBalanceHistory {
+  id              String                 @id @default(cuid())
+  leaveBalanceId  String                 @map("leave_balance_id")
+  changeType      LeaveBalanceChangeType @map("change_type")
+  changeAmount    Float                  @map("change_amount")
+  balanceBefore   Float                  @map("balance_before")
+  balanceAfter    Float                  @map("balance_after")
+  reason          String?
+  changedBy       String?                @map("changed_by")
+  leaveRequestId  String?                @map("leave_request_id")
+  createdAt       DateTime               @default(now()) @map("created_at")
+
+  leaveBalance LeaveBalance @relation(fields: [leaveBalanceId], references: [id], onDelete: Cascade)
+  changer      User?        @relation("BalanceChanger", fields: [changedBy], references: [id], onDelete: SetNull)
+
+  @@index([leaveBalanceId])
+  @@map("leave_balance_history")
+}
+
+/// Leave policy settings (key-value)
+model LeavePolicyConfig {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     Json
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("leave_policy_config")
+}
+
+// ══════════════════════════════════════════════
+//  33.8 DOCUMENTS & KYC (4 models)
+// ══════════════════════════════════════════════
+
+/// Document type definitions
+model DocumentType {
+  id              String   @id @default(cuid())
+  name            String
+  code            String   @unique
+  acceptedFormats String[] @map("accepted_formats") // ["pdf", "jpg", "png"]
+  isRequired      Boolean  @default(true) @map("is_required")
+  description     String?
+  isActive        Boolean  @default(true) @map("is_active")
+  sortOrder       Int      @default(0) @map("sort_order")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  employeeDocuments EmployeeDocument[]
+
+  @@map("document_types")
+}
+
+/// Employee uploaded documents
+model EmployeeDocument {
+  id              String         @id @default(cuid())
+  userId          String         @map("user_id")
+  documentTypeId  String         @map("document_type_id")
+  fileUrl         String?        @map("file_url")
+  fileName        String?        @map("file_name")
+  fileSize        Int?           @map("file_size")
+  mimeType        String?        @map("mime_type")
+  fileHash        String?        @map("file_hash") // SHA-256
+  storageKey      String?        @map("storage_key")
+  status          DocumentStatus @default(NOT_UPLOADED)
+  verifiedBy      String?        @map("verified_by")
+  verifiedAt      DateTime?      @map("verified_at")
+  rejectedBy      String?        @map("rejected_by")
+  rejectedAt      DateTime?      @map("rejected_at")
+  rejectionReason String?        @map("rejection_reason")
+  expiryDate      DateTime?      @map("expiry_date")
+  adminNotes      String?        @map("admin_notes")
+  version         Int            @default(1)
+  uploadedAt      DateTime?      @map("uploaded_at")
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  documentType DocumentType @relation(fields: [documentTypeId], references: [id], onDelete: Restrict)
+  verifier     User?        @relation("DocumentVerifier", fields: [verifiedBy], references: [id], onDelete: SetNull)
+  history      EmployeeDocumentHistory[]
+
+  @@unique([userId, documentTypeId])
+  @@index([userId])
+  @@index([status])
+  @@map("employee_documents")
+}
+
+/// Document status change history
+model EmployeeDocumentHistory {
+  id                 String   @id @default(cuid())
+  employeeDocumentId String   @map("employee_document_id")
+  action             String
+  oldStatus          String?  @map("old_status")
+  newStatus          String?  @map("new_status")
+  reason             String?
+  fileUrl            String?  @map("file_url")
+  actionBy           String?  @map("action_by")
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  document EmployeeDocument @relation(fields: [employeeDocumentId], references: [id], onDelete: Cascade)
+  actor    User?            @relation(fields: [actionBy], references: [id], onDelete: SetNull)
+
+  @@index([employeeDocumentId])
+  @@map("employee_document_history")
+}
+
+/// Admin-generated offer letters
+model OfferLetter {
+  id                String             @id @default(cuid())
+  userId            String             @map("user_id")
+  referenceNumber   String             @unique @map("reference_number")
+  variant           OfferLetterVariant
+  templateVersion   Int?               @map("template_version")
+  dynamicFields     Json?              @map("dynamic_fields")
+  editorContent     String?            @map("editor_content") // HTML from Tiptap
+  generatedFileUrl  String?            @map("generated_file_url")
+  generatedFileHash String?            @map("generated_file_hash") // SHA-256
+  storageKey        String?            @map("storage_key") // R2/Cloudinary key
+  status            String             @default("DRAFT") // DRAFT | GENERATED | SENT
+  generatedBy       String             @map("generated_by")
+  generatedAt       DateTime           @default(now()) @map("generated_at")
+  isArchived        Boolean            @default(false) @map("is_archived")
+  createdAt         DateTime           @default(now()) @map("created_at")
+  updatedAt         DateTime           @updatedAt @map("updated_at")
+
+  user      User @relation("OfferLetterRecipient", fields: [userId], references: [id], onDelete: Cascade)
+  generator User @relation("OfferLetterGenerator", fields: [generatedBy], references: [id], onDelete: Restrict)
+
+  @@index([userId])
+  @@map("offer_letters")
+}
+
+// ══════════════════════════════════════════════
+//  33.9 TARGETS & PERFORMANCE (1 model)
+// ══════════════════════════════════════════════
+
+/// Recruiter sourcing targets
+model RecruiterTarget {
+  id            String     @id @default(cuid())
+  recruiterId   String?    @map("recruiter_id") // null = global default target
+  targetType    TargetType @map("target_type")
+  targetValue   Int        @map("target_value")
+  effectiveFrom DateTime   @map("effective_from") @db.Date
+  effectiveTo   DateTime?  @map("effective_to") @db.Date
+  isActive      Boolean    @default(true) @map("is_active")
+  createdBy     String     @map("created_by")
+  createdAt     DateTime   @default(now()) @map("created_at")
+  updatedAt     DateTime   @updatedAt @map("updated_at")
+
+  recruiter User? @relation("TargetRecruiter", fields: [recruiterId], references: [id], onDelete: Cascade)
+  creator   User  @relation("TargetCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+
+  @@index([recruiterId, isActive])
+  @@map("recruiter_targets")
+}
+
+// ══════════════════════════════════════════════
+//  33.10 AUDIT & ANALYTICS (3 models)
+// ══════════════════════════════════════════════
+
+/// All CRUD actions platform-wide
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?  @map("user_id")
+  userRole   Role?    @map("user_role")
+  action     String   // CREATE, UPDATE, DELETE, RESTORE, LOGIN, LOGOUT, etc.
+  entityType String   @map("entity_type")
+  entityId   String?  @map("entity_id")
+  changes    Json?    // { field: { old: ..., new: ... } }
+  ipAddress  String?  @map("ip_address")
+  userAgent  String?  @map("user_agent")
+  timestamp  DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([entityType, entityId])
+  @@index([timestamp])
+  @@index([action])
+  @@index([userId, timestamp], map: "idx_audit_user_time")
+  @@map("audit_logs")
+}
+
+/// Pre-computed analytics aggregations
+model AnalyticsSnapshot {
+  id           String   @id @default(cuid())
+  snapshotType String   @map("snapshot_type")
+  periodStart  DateTime @map("period_start")
+  periodEnd    DateTime @map("period_end")
+  data         Json
+  computedAt   DateTime @default(now()) @map("computed_at")
+
+  @@index([snapshotType, periodStart])
+  @@map("analytics_snapshots")
+}
+
+/// Platform health metrics
+model PlatformHealthLog {
+  id          String   @id @default(cuid())
+  metricName  String   @map("metric_name")
+  metricValue Json     @map("metric_value")
+  recordedAt  DateTime @default(now()) @map("recorded_at")
+
+  @@index([metricName, recordedAt])
+  @@map("platform_health_logs")
+}
+
+/// Data archiving — aged records moved here for query performance (§23.5)
+model ArchivedRecord {
+  id         String   @id @default(cuid())
+  entityType String   @map("entity_type") // CANDIDATE_REPORT, AUDIT_LOG, LOGIN_HISTORY, NOTIFICATION
+  entityId   String   @map("entity_id")
+  snapshot   Json     // Full row snapshot at time of archiving
+  archivedAt DateTime @default(now()) @map("archived_at")
+
+  @@index([entityType])
+  @@index([archivedAt])
+  @@map("archived_records")
+}
+
+// ══════════════════════════════════════════════
+//  33.11 PLATFORM CONFIGURATION (3 models)
+// ══════════════════════════════════════════════
+
+/// Platform-wide key-value settings
+model PlatformSetting {
+  id        String   @id @default(cuid())
+  category  String
+  key       String   @unique
+  value     Json
+  updatedAt DateTime @updatedAt @map("updated_at")
+  updatedBy String?  @map("updated_by")
+
+  @@index([category])
+  @@map("platform_settings")
+}
+
+/// Admin-configurable dropdown values
+model DropdownOption {
+  id        String            @id @default(cuid())
+  category  DropdownCategory
+  value     String
+  label     String
+  zoneSet   ZoneSet?          @map("zone_set")
+  sortOrder Int               @default(0) @map("sort_order")
+  isActive  Boolean           @default(true) @map("is_active")
+  createdAt DateTime          @default(now()) @map("created_at")
+  updatedAt DateTime          @updatedAt @map("updated_at")
+
+  @@unique([category, value, zoneSet], map: "uq_dropdown_category_value_zoneset")
+  @@index([category, isActive])
+  @@index([category, zoneSet])
+  @@map("dropdown_options")
+}
+
+/// Customizable email templates
+model EmailTemplate {
+  id          String   @id @default(cuid())
+  templateKey String   @unique @map("template_key")
+  subject     String
+  bodyHtml    String   @map("body_html")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  updatedBy   String?  @map("updated_by")
+
+  @@map("email_templates")
+}
+
+// ══════════════════════════════════════════════
+//  33.12 LEGACY / ATTENDANCE-SCOPED LEAVE (1 model)
+// ══════════════════════════════════════════════
+
+/// Basic leave records within attendance context
+model LeaveRecord {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  date      DateTime @db.Date
+  leaveType String   @map("leave_type")
+  markedBy  String   @map("marked_by")
+  remarks   String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user   User @relation("LeaveRecordUser", fields: [userId], references: [id], onDelete: Cascade)
+  marker User @relation("LeaveRecordMarker", fields: [markedBy], references: [id], onDelete: Restrict)
+
+  @@unique([userId, date])
+  @@map("leave_records")
+}
+
+// ══════════════════════════════════════════════
+//  33.13 WEBHOOKS (1 model)
+// ══════════════════════════════════════════════
+
+/// Registered webhook endpoints for external integrations
+model WebhookEndpoint {
+  id          String   @id @default(cuid())
+  url         String
+  secret      String   // HMAC signing secret
+  events      String[] // Array of event names to subscribe to
+  description String?
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdBy   String   @map("created_by")
+
+  @@index([isActive])
+  @@map("webhook_endpoints")
+}

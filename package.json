@@ -1,0 +1,41 @@
+{
+  "name": "omg-teams",
+  "version": "1.0.0",
+  "private": true,
+  "description": "OMG Teams — Monorepo Root",
+  "scripts": {
+    "dev": "concurrently -k -n backend,frontend -c blue,magenta \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "build": "npm run build:backend && npm run build:frontend",
+    "build:backend": "cd backend && npm run build",
+    "build:frontend": "cd frontend && npm run build",
+    "start:backend": "cd backend && npm run start",
+    "start:frontend": "cd frontend && npm run start",
+    "lint": "concurrently -g -n backend,frontend -c blue,magenta \"npm run lint:backend\" \"npm run lint:frontend\"",
+    "lint:backend": "cd backend && npm run lint",
+    "lint:frontend": "cd frontend && npm run lint",
+    "lint:fix": "concurrently -g -n backend,frontend -c blue,magenta \"cd backend && npm run lint:fix\" \"cd frontend && npm run lint:fix\"",
+    "format": "prettier --write \"./*.{json,js,md,yml}\" && cd backend && npm run format && cd ../frontend && npm run format",
+    "format:check": "prettier --check \"./*.{json,js,md,yml}\"",
+    "typecheck": "concurrently -g -n backend,frontend -c blue,magenta \"cd backend && npm run typecheck\" \"cd frontend && npm run typecheck\"",
+    "test": "concurrently -g -n backend,frontend -c blue,magenta \"cd backend && npm run test\" \"cd frontend && npm run test\"",
+    "test:backend": "cd backend && npm run test",
+    "test:frontend": "cd frontend && npm run test",
+    "validate": "npm run typecheck && npm run lint && npm run test",
+    "clean": "cd backend && npm run clean && cd ../frontend && rm -rf .next",
+    "install:all": "npm install && cd backend && npm install --legacy-peer-deps && cd ../frontend && npm install",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^20.0.0",
+    "@commitlint/config-conventional": "^20.0.0",
+    "concurrently": "^9.0.0",
+    "husky": "^9.0.0",
+    "lint-staged": "^16.0.0",
+    "prettier": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

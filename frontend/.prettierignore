@@ -1,0 +1,8 @@
+.next
+out
+node_modules
+coverage
+package-lock.json
+*.tsbuildinfo
+public/sw.js
+public/workbox-*.js
