@@ -281,14 +281,17 @@ export function createApp(): express.Application {
     const mins = Math.floor((uptime % 3600) / 60);
     const secs = Math.floor(uptime % 60);
     const uptimeStr = `${hrs}h ${mins}m ${secs}s`;
-    const svcEntries = Object.entries(status.services) as [string, { status: string; message?: string }][];
+    const svcEntries = Object.entries(status.services) as [
+      string,
+      { state: string; critical: boolean; error?: string; latencyMs?: number },
+    ][];
 
     const svcRows = svcEntries
       .map(([name, svc]) => {
-        const isOk = svc.status === "connected" || svc.status === "ready" || svc.status === "ok";
-        const color = isOk ? "#22c55e" : svc.status === "degraded" ? "#f59e0b" : "#ef4444";
+        const isOk = svc.state === "ready" || svc.state === "connected" || svc.state === "ok";
+        const color = isOk ? "#22c55e" : svc.state === "degraded" ? "#f59e0b" : "#ef4444";
         const label = name.charAt(0).toUpperCase() + name.slice(1);
-        return `<div class="svc-row"><span class="svc-dot" style="background:${color};box-shadow:0 0 6px ${color}80"></span><span class="svc-name">${label}</span><span class="svc-status" style="color:${color}">${svc.status}</span></div>`;
+        return `<div class="svc-row"><span class="svc-dot" style="background:${color};box-shadow:0 0 6px ${color}80"></span><span class="svc-name">${label}</span><span class="svc-status" style="color:${color}">${svc.state}</span></div>`;
       })
       .join("");
 
@@ -354,7 +357,7 @@ export function createApp(): express.Application {
       </div>
       <div class="meta-item">
         <div class="meta-label">Services</div>
-        <div class="meta-value">${status.counts.healthy}/${status.counts.total}</div>
+        <div class="meta-value">${status.counts["healthy"]}/${status.counts["total"]}</div>
       </div>
     </div>
     <div class="back"><a href="/">&larr; Back to API</a></div>
