@@ -22,8 +22,12 @@ export function Tooltip({ content, side = "top", children, delay = 200 }: Toolti
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const show = useCallback(() => {
-    // Skip on touch/coarse-pointer devices — tooltips can't auto-dismiss there
-    if (typeof window !== "undefined" && window.matchMedia("(hover: none), (pointer: coarse)").matches) {
+    // Skip only on pure touch devices (primary input is coarse AND can't hover).
+    // Laptops with touch screens still have a mouse/trackpad so they pass this check.
+    if (
+      typeof window !== "undefined" &&
+      window.matchMedia("(hover: none) and (pointer: coarse)").matches
+    ) {
       return;
     }
     timerRef.current = setTimeout(() => setVisible(true), delay);

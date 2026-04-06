@@ -1,7 +1,7 @@
 "use client";
 
-import React from "react";
-import type { LucideIcon } from "lucide-react";
+import React, { useState } from "react";
+import { Eye, EyeOff, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export type InputSize = "sm" | "md" | "lg";
@@ -55,11 +55,17 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
       className,
       id,
       disabled,
+      type,
       ...props
     },
     ref,
   ) => {
     const inputId = id || (label ? label.toLowerCase().replace(/\s+/g, "-") : undefined);
+    const isPassword = type === "password";
+    const [showPassword, setShowPassword] = useState(false);
+    const effectiveType = isPassword ? (showPassword ? "text" : "password") : type;
+    // When password, the toggle button occupies the right side — suppress rightIcon
+    const ShowRightIcon = isPassword ? undefined : RightIcon;
 
     return (
       <div className="w-full">
@@ -83,6 +89,7 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
             <input
               ref={ref}
               id={inputId}
+              type={effectiveType}
               disabled={disabled}
               aria-invalid={!!error}
               aria-describedby={
@@ -96,7 +103,7 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
                 sizeClasses[size],
                 "px-3",
                 LeftIcon && leftIconPadding[size],
-                RightIcon && rightIconPadding[size],
+                (ShowRightIcon || isPassword) && rightIconPadding[size],
                 leftAddon
                   ? "rounded-l-none rounded-r-md"
                   : rightAddon
@@ -107,10 +114,26 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
               )}
               {...props}
             />
-            {RightIcon && (
+            {ShowRightIcon && (
               <span className="text-text-muted pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2.5">
-                <RightIcon size={iconSizeMap[size]} aria-hidden="true" />
+                <ShowRightIcon size={iconSizeMap[size]} aria-hidden="true" />
               </span>
+            )}
+            {isPassword && (
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                disabled={disabled}
+                tabIndex={-1}
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                className="text-text-muted hover:text-text-primary absolute inset-y-0 right-0 flex items-center pr-2.5 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {showPassword ? (
+                  <EyeOff size={iconSizeMap[size]} aria-hidden="true" />
+                ) : (
+                  <Eye size={iconSizeMap[size]} aria-hidden="true" />
+                )}
+              </button>
             )}
           </div>
           {rightAddon && (

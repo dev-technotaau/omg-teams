@@ -7,7 +7,7 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import axios from "axios";
-import { Sun, Moon } from "lucide-react";
+import { Sun, Moon, Eye, EyeOff } from "lucide-react";
 import { useTheme } from "next-themes";
 import { extractApiError } from "@/lib/api";
 import { getDeviceId } from "@/lib/device-id";
@@ -56,6 +56,7 @@ export default function LoginPage() {
   const [turnstileToken, setTurnstileToken] = useState("");
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   // §23.16 — Backup code for device lock bypass
   const [showBackupCode, setShowBackupCode] = useState(false);
   const [backupCode, setBackupCode] = useState("");
@@ -250,19 +251,30 @@ export default function LoginPage() {
               >
                 Password
               </label>
-              <input
-                id="password"
-                type="password"
-                placeholder="Enter your password"
-                autoComplete="current-password"
-                className={cn(
-                  "w-full rounded-md border px-3 py-2.5 text-sm outline-hidden transition-colors",
-                  "bg-background text-foreground placeholder:text-muted-foreground",
-                  "focus:border-ring focus:ring-ring/20 focus:ring-2",
-                  formErrors.password ? "border-red-500" : "border-border",
-                )}
-                {...register("password")}
-              />
+              <div className="relative">
+                <input
+                  id="password"
+                  type={showPassword ? "text" : "password"}
+                  placeholder="Enter your password"
+                  autoComplete="current-password"
+                  className={cn(
+                    "w-full rounded-md border px-3 py-2.5 pr-10 text-sm outline-hidden transition-colors",
+                    "bg-background text-foreground placeholder:text-muted-foreground",
+                    "focus:border-ring focus:ring-ring/20 focus:ring-2",
+                    formErrors.password ? "border-red-500" : "border-border",
+                  )}
+                  {...register("password")}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  tabIndex={-1}
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  className="text-muted-foreground hover:text-foreground absolute inset-y-0 right-0 flex items-center pr-3 transition-colors"
+                >
+                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
               {formErrors.password && (
                 <p className="mt-1 text-xs text-red-500">{formErrors.password.message}</p>
               )}
