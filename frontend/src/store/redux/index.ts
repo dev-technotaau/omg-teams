@@ -16,5 +16,8 @@ export {
   markAllAsRead,
   removeNotification,
   clearNotifications,
+  setUnreadCount,
+  incrementUnreadCount,
+  decrementUnreadCount,
 } from "./slices/notification-slice";
 export type { Notification } from "./slices/notification-slice";

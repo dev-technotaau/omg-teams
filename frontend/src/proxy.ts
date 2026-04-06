@@ -128,11 +128,33 @@ function buildCsp(nonce: string): string {
   return directives.join("; ");
 }
 
+/**
+ * Permissions-Policy — explicitly allow features that Cloudflare Turnstile
+ * probes for (e.g. xr-spatial-tracking, private-state-token) so the
+ * browser stops logging permissions-policy violations from the iframe.
+ */
+const PERMISSIONS_POLICY = [
+  "accelerometer=()",
+  "autoplay=()",
+  "camera=()",
+  "geolocation=()",
+  "gyroscope=()",
+  "magnetometer=()",
+  "microphone=()",
+  "payment=()",
+  "usb=()",
+  // Allow for self + Cloudflare Turnstile iframe
+  'xr-spatial-tracking=(self "https://challenges.cloudflare.com")',
+  'private-state-token-redemption=(self "https://challenges.cloudflare.com")',
+  'private-state-token-issuance=(self "https://challenges.cloudflare.com")',
+].join(", ");
+
 /** Attach CSP + nonce headers to a NextResponse */
 function nextWithCsp(nonce: string): NextResponse {
   const csp = buildCsp(nonce);
   const response = NextResponse.next();
   response.headers.set("Content-Security-Policy", csp);
+  response.headers.set("Permissions-Policy", PERMISSIONS_POLICY);
   response.headers.set("x-nonce", nonce);
   return response;
 }
@@ -142,6 +164,7 @@ function redirectWithCsp(url: URL, nonce: string): NextResponse {
   const csp = buildCsp(nonce);
   const response = NextResponse.redirect(url);
   response.headers.set("Content-Security-Policy", csp);
+  response.headers.set("Permissions-Policy", PERMISSIONS_POLICY);
   response.headers.set("x-nonce", nonce);
   return response;
 }

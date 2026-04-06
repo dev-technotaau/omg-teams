@@ -62,6 +62,18 @@ export const notificationSlice = createSlice({
       state.items = [];
       state.unreadCount = 0;
     },
+    /** Replace the unread count with an authoritative value from the server. */
+    setUnreadCount(state, action: PayloadAction<number>) {
+      state.unreadCount = Math.max(0, action.payload);
+    },
+    /** Bump the unread count by one (e.g. on real-time push). */
+    incrementUnreadCount(state) {
+      state.unreadCount += 1;
+    },
+    /** Drop the unread count by one (e.g. optimistic mark-as-read from UI). */
+    decrementUnreadCount(state) {
+      state.unreadCount = Math.max(0, state.unreadCount - 1);
+    },
   },
 });
 
@@ -71,4 +83,7 @@ export const {
   markAllAsRead,
   removeNotification,
   clearNotifications,
+  setUnreadCount,
+  incrementUnreadCount,
+  decrementUnreadCount,
 } = notificationSlice.actions;

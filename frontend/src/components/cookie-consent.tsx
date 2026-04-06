@@ -14,8 +14,8 @@ export function CookieConsentBanner() {
   if (hasAcknowledged) return null;
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-9999 p-4">
-      <div className="bg-bg-surface border-border-default mx-auto flex max-w-xl items-center gap-3 rounded-xl border px-5 py-4 shadow-2xl">
+    <div className="pointer-events-none fixed inset-x-0 bottom-0 z-9999 p-4">
+      <div className="bg-bg-surface border-border-default pointer-events-auto mx-auto flex max-w-xl items-center gap-3 rounded-xl border px-5 py-4 shadow-2xl">
         <Cookie size={18} className="text-primary-500 shrink-0" />
         <p className="text-text-secondary flex-1 text-sm">
           We use cookies for authentication, security, and platform functionality.

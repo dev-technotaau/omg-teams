@@ -44,6 +44,13 @@ function setupBackgroundHandler() {
     };
 
     self.registration.showNotification(notificationTitle, notificationOptions);
+
+    // Notify any open app tabs so they can re-sync unread count
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+      for (const client of clients) {
+        client.postMessage({ type: "FCM_BACKGROUND_RECEIVED" });
+      }
+    });
   });
 }
 

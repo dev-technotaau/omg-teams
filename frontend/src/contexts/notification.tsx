@@ -5,8 +5,16 @@ import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { onForegroundMessage } from "@/lib/firebase";
 import { useSocket } from "@/hooks/use-socket";
+import {
+  useAppDispatch,
+  setUnreadCount,
+  incrementUnreadCount,
+} from "@/store/redux";
+import { getUnreadCount } from "@/services/notification.service";
 import type { ReactNode } from "react";
 import type { NotificationData } from "@/types/notification";
+
+const UNREAD_POLL_INTERVAL = 60_000; // 60 seconds
 
 // ──────────────────────────────────────────────
 //  Notification Context
@@ -34,8 +42,56 @@ interface NotificationContextValue {
 const NotificationContext = createContext<NotificationContextValue | null>(null);
 
 export function NotificationProvider({ children }: { children: ReactNode }) {
+  const dispatch = useAppDispatch();
   const [recent, setRecent] = useState<NotificationData[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+
+  // ── Source 1: REST polling (authoritative count) ──
+  const syncUnreadCount = useCallback(async () => {
+    try {
+      const count = await getUnreadCount();
+      dispatch(setUnreadCount(count));
+    } catch {
+      // silent — don't spam on network errors
+    }
+  }, [dispatch]);
+
+  useEffect(() => {
+    // Fetch on mount
+    void syncUnreadCount();
+
+    // Poll every 60s
+    const interval = setInterval(() => {
+      void syncUnreadCount();
+    }, UNREAD_POLL_INTERVAL);
+
+    // Refresh on tab focus (user coming back)
+    const onFocus = () => void syncUnreadCount();
+    window.addEventListener("focus", onFocus);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [syncUnreadCount]);
+
+  // ── Source 3 + 4: Service worker push messages → dispatch increment ──
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
+
+    const onSwMessage = (event: MessageEvent) => {
+      const data = event.data as { type?: string } | undefined;
+      if (data?.type === "PUSH_RECEIVED" || data?.type === "FCM_BACKGROUND_RECEIVED") {
+        // Re-sync to get authoritative count from server
+        void syncUnreadCount();
+      }
+    };
+
+    navigator.serviceWorker.addEventListener("message", onSwMessage);
+    return () => {
+      navigator.serviceWorker.removeEventListener("message", onSwMessage);
+    };
+  }, [syncUnreadCount]);
 
   const fetchRecent = useCallback(async () => {
     setIsLoading(true);
@@ -78,13 +134,29 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // Listen for real-time new notifications via Socket.IO
+  // ── Source 2: Socket.IO real-time ──
+  // A new notification arrived — bump local list + unread count optimistically
   useSocket<NotificationData>(
     "notification:new",
-    useCallback((data: NotificationData) => {
-      setRecent((prev) => [data, ...prev].slice(0, 20));
-      toast.info(data.title, { description: data.message });
-    }, []),
+    useCallback(
+      (data: NotificationData) => {
+        setRecent((prev) => [data, ...prev].slice(0, 20));
+        dispatch(incrementUnreadCount());
+        toast.info(data.title, { description: data.message });
+      },
+      [dispatch],
+    ),
+  );
+
+  // Backend also pushes authoritative unread-count on mark-as-read/delete events
+  useSocket<{ unreadCount: number }>(
+    "notification:count",
+    useCallback(
+      (data: { unreadCount: number }) => {
+        dispatch(setUnreadCount(data.unreadCount));
+      },
+      [dispatch],
+    ),
   );
 
   // Listen for foreground FCM messages (when tab IS focused)
@@ -100,6 +172,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       //  but FCM can arrive when Socket.IO is disconnected)
       toast.info(title, { description: body });
 
+      // Optimistically bump unread count, then re-sync to get authoritative value
+      dispatch(incrementUnreadCount());
+      void syncUnreadCount();
+
       // Refresh recent notifications to stay in sync
       void fetchRecent();
     });
@@ -107,7 +183,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     return () => {
       unsub?.();
     };
-  }, [fetchRecent]);
+  }, [fetchRecent, dispatch, syncUnreadCount]);
 
   return (
     <NotificationContext.Provider

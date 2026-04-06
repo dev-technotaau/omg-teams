@@ -44,7 +44,6 @@ interface AuthState {
   user: User | null;
   isLoading: boolean;
   isAuthenticated: boolean;
-  unreadNotifications: number;
   login: (payload: LoginPayload) => Promise<void>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
@@ -67,25 +66,15 @@ const AuthContext = createContext<AuthState | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [unreadNotifications, setUnreadNotifications] = useState(0);
 
   const joinSocketRooms = useCallback((u: User) => {
     connectSocket();
     try {
       const socket = getSocket();
       socket.emit("auth:join", { userId: u.id, role: u.role });
-
-      // Listen for real-time notification count updates
-      socket.off("notification:count");
-      socket.on("notification:count", (data: { unreadCount: number }) => {
-        setUnreadNotifications(data.unreadCount);
-      });
-
-      // Listen for new notifications (for toast display etc.)
-      socket.off("notification:new");
-      socket.on("notification:new", () => {
-        setUnreadNotifications((prev) => prev + 1);
-      });
+      // Note: notification:count and notification:new listeners are owned by
+      // NotificationProvider (contexts/notification.tsx) which dispatches to
+      // the Redux notifications slice as the single source of truth.
     } catch {
       // Socket not ready yet
     }
@@ -122,7 +111,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // ignore — server may already have cleared cookies
     } finally {
       setUser(null);
-      setUnreadNotifications(0);
       disconnectSocket();
     }
   }, []);
@@ -137,7 +125,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         user,
         isLoading,
         isAuthenticated: user !== null,
-        unreadNotifications,
         login,
         logout,
         refresh,

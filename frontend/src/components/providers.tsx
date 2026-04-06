@@ -12,6 +12,7 @@ import { store, persistor } from "@/store/redux";
 import { MaintenanceGate } from "@/components/maintenance-gate";
 import { PWAPrompt } from "@/components/pwa-prompt";
 import { CookieConsentBanner } from "@/components/cookie-consent";
+import { FaviconBadge } from "@/components/favicon-badge";
 import { useEffect, type ReactNode } from "react";
 
 const queryClient = makeQueryClient();
@@ -40,6 +41,7 @@ export function Providers({ children, nonce }: { children: ReactNode; nonce?: st
             nonce={nonce}
           >
             <MaintenanceGate>{children}</MaintenanceGate>
+            <FaviconBadge />
             <PWAPrompt />
             <Toaster richColors position="top-right" closeButton />
             <CookieConsentBanner />

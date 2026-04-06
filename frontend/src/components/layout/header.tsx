@@ -24,6 +24,7 @@ import { api } from "@/lib/api";
 import { useKeyboardShortcut } from "@/hooks";
 import { usePresence } from "@/hooks/use-presence";
 import { useUIStore } from "@/store/ui";
+import { useAppDispatch, useAppSelector, decrementUnreadCount } from "@/store/redux";
 import {
   Avatar,
   DropdownMenu,
@@ -46,10 +47,15 @@ import type { CommandGroup } from "@/components/ui/command-palette";
 // ──────────────────────────────────────────────
 
 export function Header() {
-  const { user, logout, unreadNotifications } = useAuth();
+  const { user, logout } = useAuth();
   const { theme, setTheme } = useTheme();
   const router = useRouter();
   const commandPalette = useCommandPalette();
+
+  // Unread count is sourced from Redux (kept in sync by NotificationProvider
+  // via REST polling, Socket.IO, Web Push, and FCM — see contexts/notification.tsx)
+  const dispatch = useAppDispatch();
+  const unreadNotifications = useAppSelector((s) => s.notifications.unreadCount);
 
   // Ctrl/Cmd+K opens command palette
   useKeyboardShortcut("k", () => commandPalette.setOpen(true), { ctrl: true });
@@ -94,14 +100,22 @@ export function Header() {
     if (notifOpen) setNotifOpen(false);
   });
 
-  const markAsRead = useCallback(async (id: string) => {
-    try {
-      await api.patch(`/notifications/${id}/read`);
-      setNotifItems((prev) => prev.map((n) => (n.id === id ? { ...n, isRead: true } : n)));
-    } catch {
-      /* silent */
-    }
-  }, []);
+  const markAsRead = useCallback(
+    async (id: string) => {
+      // Only decrement if this item was actually unread
+      const wasUnread = notifItems.find((n) => n.id === id)?.isRead === false;
+      try {
+        await api.patch(`/notifications/${id}/read`);
+        setNotifItems((prev) => prev.map((n) => (n.id === id ? { ...n, isRead: true } : n)));
+        // Optimistic Redux decrement — backend also emits notification:count
+        // via socket with the authoritative value right after.
+        if (wasUnread) dispatch(decrementUnreadCount());
+      } catch {
+        /* silent */
+      }
+    },
+    [dispatch, notifItems],
+  );
 
   const handleLogout = useCallback(async () => {
     await logout();

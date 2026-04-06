@@ -10,6 +10,11 @@ export interface Notification {
   createdAt: string;
 }
 
+export async function getUnreadCount(): Promise<number> {
+  const res = await api.get<{ unreadCount: number }>("/notifications/unread-count");
+  return res.data.unreadCount ?? 0;
+}
+
 export async function listNotifications(page = 1) {
   const res = await api.get<{
     data: Notification[];

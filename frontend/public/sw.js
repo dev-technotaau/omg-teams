@@ -43,3 +43,54 @@ self.addEventListener("fetch", (event) => {
     ),
   );
 });
+
+// ── Push: native Web Push event handler ──
+// Shows a system notification AND tells open pages to re-sync unread count.
+self.addEventListener("push", (event) => {
+  let payload = {};
+  try {
+    payload = event.data ? event.data.json() : {};
+  } catch {
+    payload = event.data ? { body: event.data.text() } : {};
+  }
+
+  const title = payload.title ?? "OMG Teams";
+  const options = {
+    body: payload.body ?? "You have a new notification",
+    icon: payload.icon ?? "/icons/icon-192x192.png",
+    badge: "/icons/icon-96x96.png",
+    tag: payload.tag ?? "omg-notification",
+    data: { url: payload.url ?? "/notifications" },
+  };
+
+  event.waitUntil(
+    Promise.all([
+      self.registration.showNotification(title, options),
+      // Notify any open tabs so they can update their in-app state
+      self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+        for (const client of clients) {
+          client.postMessage({ type: "PUSH_RECEIVED" });
+        }
+      }),
+    ]),
+  );
+});
+
+// ── Notification click: focus/open the app at the target URL ──
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const url = event.notification.data?.url ?? "/";
+
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+      for (const client of clients) {
+        if (client.url.includes(self.location.origin) && "focus" in client) {
+          client.focus();
+          if ("navigate" in client) client.navigate(url);
+          return;
+        }
+      }
+      return self.clients.openWindow(url);
+    }),
+  );
+});
