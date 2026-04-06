@@ -33,6 +33,10 @@ async function proxyRequest(
   if (contentType) headers.set("content-type", contentType);
   if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
 
+  // BFF shared secret — identifies this as a trusted service-to-service call
+  const bffSecret = process.env.BFF_SECRET;
+  if (bffSecret) headers.set("x-bff-secret", bffSecret);
+
   // Forward client headers for rate limiting / audit
   const forwarded = request.headers.get("x-forwarded-for") || request.headers.get("x-real-ip");
   if (forwarded) headers.set("x-forwarded-for", forwarded);

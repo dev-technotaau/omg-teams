@@ -18,7 +18,21 @@ import type { Request, Response, NextFunction } from "express";
 
 const CSRF_COOKIE = "csrf_token";
 const CSRF_HEADER = "x-csrf-token";
+const BFF_SECRET_HEADER = "x-bff-secret";
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+/**
+ * Constant-time comparison of two strings of potentially different lengths.
+ * Prevents both timing attacks and length-based early-exit attacks.
+ */
+function safeCompare(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Middleware: sets a CSRF token cookie if not present.
@@ -53,6 +67,18 @@ export function csrfProtection(req: Request, res: Response, next: NextFunction):
   if (req.headers.authorization) {
     next();
     return;
+  }
+
+  // Skip if request carries the BFF shared secret — this is an authenticated
+  // service-to-service call from the Next.js BFF. CSRF's double-submit-cookie
+  // pattern is incompatible with a BFF boundary (browser cookies go to the BFF,
+  // not to us), so we establish trust via a pre-shared secret instead.
+  if (env.BFF_SECRET) {
+    const bffHeader = req.headers[BFF_SECRET_HEADER];
+    if (typeof bffHeader === "string" && safeCompare(bffHeader, env.BFF_SECRET)) {
+      next();
+      return;
+    }
   }
 
   const cookieValue = (req.cookies as Record<string, string | undefined>)[CSRF_COOKIE];

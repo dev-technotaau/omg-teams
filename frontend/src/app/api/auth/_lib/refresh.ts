@@ -79,12 +79,16 @@ async function doRefresh(): Promise<{
   try {
     // The OMG backend expects refresh_token as a cookie on the restricted path.
     // In server-to-server fetch, we send it as a Cookie header manually.
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Cookie: `refresh_token=${refreshToken}`,
+    };
+    const bffSecret = process.env.BFF_SECRET;
+    if (bffSecret) headers["x-bff-secret"] = bffSecret;
+
     const res = await fetch(`${BACKEND_URL}/auth/refresh`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Cookie: `refresh_token=${refreshToken}`,
-      },
+      headers,
       cache: "no-store",
     });
 

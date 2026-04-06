@@ -78,7 +78,7 @@ export function createApp(): express.Application {
   // ──────────────────────────────────────────────
   app.use(express.json({ limit: "10mb" }));
   app.use(express.urlencoded({ extended: true, limit: "10mb" }));
-  app.use(cookieParser());
+  app.use(cookieParser(env.COOKIE_SECRET || undefined));
 
   // XSS protection handled by WAF middleware (waf.ts) + DOMPurify sanitization (validators/purify.ts)
 

@@ -24,6 +24,15 @@ export async function backendFetch(
     headers.set("Content-Type", "application/json");
   }
 
+  // Attach the BFF shared secret so the backend's CSRF middleware recognises
+  // this as a trusted service-to-service call. CSRF's double-submit-cookie
+  // pattern is broken across the BFF boundary (browser cookies go to Next.js,
+  // not to the Express backend), so we establish trust via a pre-shared secret.
+  const bffSecret = process.env.BFF_SECRET;
+  if (bffSecret) {
+    headers.set("x-bff-secret", bffSecret);
+  }
+
   // Forward client info for rate limiting / audit
   if (request) {
     const forwarded = request.headers.get("x-forwarded-for") || request.headers.get("x-real-ip");
