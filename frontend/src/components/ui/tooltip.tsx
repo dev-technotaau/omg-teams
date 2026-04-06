@@ -22,6 +22,10 @@ export function Tooltip({ content, side = "top", children, delay = 200 }: Toolti
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const show = useCallback(() => {
+    // Skip on touch/coarse-pointer devices — tooltips can't auto-dismiss there
+    if (typeof window !== "undefined" && window.matchMedia("(hover: none), (pointer: coarse)").matches) {
+      return;
+    }
     timerRef.current = setTimeout(() => setVisible(true), delay);
   }, [delay]);
 
@@ -48,20 +52,20 @@ export function Tooltip({ content, side = "top", children, delay = 200 }: Toolti
 
       switch (side) {
         case "top":
-          top = rect.top - tipRect.height - ARROW_SIZE - GAP + window.scrollY;
-          left = rect.left + rect.width / 2 - tipRect.width / 2 + window.scrollX;
+          top = rect.top - tipRect.height - ARROW_SIZE - GAP;
+          left = rect.left + rect.width / 2 - tipRect.width / 2;
           break;
         case "bottom":
-          top = rect.bottom + ARROW_SIZE + GAP + window.scrollY;
-          left = rect.left + rect.width / 2 - tipRect.width / 2 + window.scrollX;
+          top = rect.bottom + ARROW_SIZE + GAP;
+          left = rect.left + rect.width / 2 - tipRect.width / 2;
           break;
         case "left":
-          top = rect.top + rect.height / 2 - tipRect.height / 2 + window.scrollY;
-          left = rect.left - tipRect.width - ARROW_SIZE - GAP + window.scrollX;
+          top = rect.top + rect.height / 2 - tipRect.height / 2;
+          left = rect.left - tipRect.width - ARROW_SIZE - GAP;
           break;
         case "right":
-          top = rect.top + rect.height / 2 - tipRect.height / 2 + window.scrollY;
-          left = rect.right + ARROW_SIZE + GAP + window.scrollX;
+          top = rect.top + rect.height / 2 - tipRect.height / 2;
+          left = rect.right + ARROW_SIZE + GAP;
           break;
       }
 
@@ -110,7 +114,7 @@ export function Tooltip({ content, side = "top", children, delay = 200 }: Toolti
             ref={tooltipRef}
             role="tooltip"
             className={cn(
-              "animate-fade-in bg-bg-tooltip pointer-events-none absolute z-200 max-w-xs rounded-md px-2.5 py-1.5 text-xs text-white shadow-lg",
+              "animate-fade-in bg-bg-tooltip pointer-events-none fixed z-9999 max-w-xs rounded-md px-2.5 py-1.5 text-xs text-white shadow-lg",
             )}
             style={coords ? { top: coords.top, left: coords.left } : { top: -9999, left: -9999 }}
           >

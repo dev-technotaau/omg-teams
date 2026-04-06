@@ -104,7 +104,7 @@ export function PWAPrompt() {
     <>
       {/* Install Banner — Chromium (Android, Desktop) */}
       {showInstall && (
-        <div className="bg-primary-50 border-primary-200 fixed right-4 bottom-4 left-4 z-50 flex items-center gap-3 rounded-lg border p-4 shadow-lg transition-shadow hover:shadow-xl sm:left-auto sm:max-w-sm">
+        <div className="bg-primary-50 border-primary-200 hover:border-primary-300 fixed right-4 bottom-4 left-4 z-50 flex items-center gap-3 rounded-lg border p-4 shadow-lg transition-all duration-200 hover:-translate-y-0.5 hover:shadow-2xl sm:left-auto sm:max-w-sm">
           <Download size={20} className="text-primary-600 shrink-0" />
           <div className="min-w-0 flex-1">
             <p className="text-primary-900 text-sm font-medium">Install OMG Teams</p>
@@ -112,13 +112,13 @@ export function PWAPrompt() {
           </div>
           <button
             onClick={() => void handleInstall()}
-            className="bg-primary-600 hover:bg-primary-700 active:bg-primary-800 shrink-0 rounded-md px-3 py-1.5 text-xs font-medium text-white transition-colors"
+            className="bg-primary-600 hover:bg-primary-700 active:bg-primary-800 shrink-0 cursor-pointer rounded-md px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-all duration-200 hover:scale-105 hover:shadow-md active:scale-95"
           >
             Install
           </button>
           <button
             onClick={handleDismissInstall}
-            className="text-primary-500 hover:text-primary-700 active:text-primary-800 shrink-0 rounded-md p-1 transition-colors hover:bg-primary-100"
+            className="text-primary-500 hover:bg-primary-100 hover:text-primary-700 active:bg-primary-200 shrink-0 cursor-pointer rounded-md p-1 transition-all duration-200 hover:scale-110"
             aria-label="Dismiss"
           >
             <X size={16} />
@@ -128,7 +128,7 @@ export function PWAPrompt() {
 
       {/* Install Banner — iOS Safari */}
       {showIOSInstall && (
-        <div className="bg-primary-50 border-primary-200 fixed right-4 bottom-4 left-4 z-50 flex items-center gap-3 rounded-lg border p-4 shadow-lg transition-shadow hover:shadow-xl sm:left-auto sm:max-w-sm">
+        <div className="bg-primary-50 border-primary-200 hover:border-primary-300 fixed right-4 bottom-4 left-4 z-50 flex items-center gap-3 rounded-lg border p-4 shadow-lg transition-all duration-200 hover:-translate-y-0.5 hover:shadow-2xl sm:left-auto sm:max-w-sm">
           <Share size={20} className="text-primary-600 shrink-0" />
           <div className="min-w-0 flex-1">
             <p className="text-primary-900 text-sm font-medium">Install OMG Teams</p>
@@ -138,7 +138,7 @@ export function PWAPrompt() {
           </div>
           <button
             onClick={handleDismissInstall}
-            className="text-primary-500 hover:text-primary-700 active:text-primary-800 shrink-0 rounded-md p-1 transition-colors hover:bg-primary-100"
+            className="text-primary-500 hover:bg-primary-100 hover:text-primary-700 active:bg-primary-200 shrink-0 cursor-pointer rounded-md p-1 transition-all duration-200 hover:scale-110"
             aria-label="Dismiss"
           >
             <X size={16} />
@@ -148,7 +148,7 @@ export function PWAPrompt() {
 
       {/* Update Toast */}
       {showUpdate && (
-        <div className="bg-info-50 border-info-200 fixed right-4 bottom-4 left-4 z-50 flex items-center gap-3 rounded-lg border p-4 shadow-lg transition-shadow hover:shadow-xl sm:left-auto sm:max-w-sm">
+        <div className="bg-info-50 border-info-200 hover:border-info-300 fixed right-4 bottom-4 left-4 z-50 flex items-center gap-3 rounded-lg border p-4 shadow-lg transition-all duration-200 hover:-translate-y-0.5 hover:shadow-2xl sm:left-auto sm:max-w-sm">
           <RefreshCw size={20} className="text-info-600 shrink-0" />
           <div className="min-w-0 flex-1">
             <p className="text-info-900 text-sm font-medium">Update available</p>
@@ -156,7 +156,7 @@ export function PWAPrompt() {
           </div>
           <button
             onClick={handleUpdate}
-            className="bg-info-600 hover:bg-info-700 active:bg-info-800 shrink-0 rounded-md px-3 py-1.5 text-xs font-medium text-white transition-colors"
+            className="bg-info-600 hover:bg-info-700 active:bg-info-800 shrink-0 cursor-pointer rounded-md px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-all duration-200 hover:scale-105 hover:shadow-md active:scale-95"
           >
             Refresh
           </button>
