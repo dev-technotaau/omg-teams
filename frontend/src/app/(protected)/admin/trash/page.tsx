@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { api, extractApiError } from "@/lib/api";
 import { bulkRestore } from "@/services/bulk.service";
 import { exportToXLSX } from "@/utils/export-table";
+import { pluralize } from "@/utils/format";
 import { DEFAULT_LARGE_PAGE_SIZE } from "@/constants/pagination";
 import {
   PageHeader,
@@ -131,7 +132,7 @@ export default function TrashPage() {
           break;
         case "bulkRestore":
           await bulkRestore(Array.from(selected));
-          toast.success(`${selected.size} items restored`);
+          toast.success(`${pluralize(selected.size, "item")} restored`);
           break;
         case "bulkDelete":
           for (const id of selected) {
@@ -142,7 +143,7 @@ export default function TrashPage() {
                 id: item.id,
               });
           }
-          toast.success(`${selected.size} items permanently deleted`);
+          toast.success(`${pluralize(selected.size, "item")} permanently deleted`);
           break;
       }
       setSelected(new Set());
@@ -153,11 +154,11 @@ export default function TrashPage() {
   };
 
   const handleSort = useCallback(
-    (key: string) => {
-      setSortDir((prev) => (sortKey === key && prev === "asc" ? "desc" : "asc"));
-      setSortKey(key);
+    (key: string | null, dir: "asc" | "desc" | null) => {
+      setSortKey(key ?? "");
+      setSortDir(dir ?? "asc");
     },
-    [sortKey],
+    [],
   );
 
   const handleExport = useCallback(() => {
@@ -191,6 +192,10 @@ export default function TrashPage() {
         case "deletedAt":
           aVal = new Date(a.deletedAt).getTime();
           bVal = new Date(b.deletedAt).getTime();
+          break;
+        case "deletedBy":
+          aVal = (a.deletedBy ?? "").toString().toLowerCase();
+          bVal = (b.deletedBy ?? "").toString().toLowerCase();
           break;
         default:
           return 0;
@@ -233,6 +238,7 @@ export default function TrashPage() {
     {
       key: "deletedBy",
       header: "Deleted By",
+      sortable: true,
     },
     {
       key: "deletedAt",

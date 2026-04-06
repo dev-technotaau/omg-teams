@@ -56,6 +56,7 @@ import {
 import type { Column, ViewType, RowDensity } from "@/components/ui";
 import { useFilterPresets } from "@/hooks/use-filter-presets";
 import { cn } from "@/lib/utils";
+import { pluralize } from "@/utils/format";
 import { CalendarDatePicker } from "@/components/ui/calendar-date-picker";
 import { DEFAULT_LARGE_PAGE_SIZE } from "@/constants/pagination";
 
@@ -227,12 +228,12 @@ export default function AdminReportsPage() {
   }, []);
 
   const handleSort = useCallback(
-    (key: string) => {
-      setSortDir((prev) => (sortKey === key && prev === "asc" ? "desc" : "asc"));
-      setSortKey(key);
+    (key: string | null, dir: "asc" | "desc" | null) => {
+      setSortKey(key ?? "");
+      setSortDir(dir ?? "asc");
       setPage(1);
     },
-    [sortKey],
+    [],
   );
 
   const handleExport = useCallback(async () => {
@@ -386,6 +387,7 @@ export default function AdminReportsPage() {
     {
       key: "zone",
       header: "Zone",
+      sortable: true,
       defaultHidden: true,
       cell: (r) => (
         <span className="bg-bg-muted text-text-secondary inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs">
@@ -397,6 +399,7 @@ export default function AdminReportsPage() {
     {
       key: "location",
       header: "Location",
+      sortable: true,
       defaultHidden: true,
       cell: (r) => (
         <span className="text-text-muted text-xs">
@@ -407,6 +410,7 @@ export default function AdminReportsPage() {
     {
       key: "recruiter",
       header: "Recruiter",
+      sortable: true,
       cell: (r) => (
         <div className="flex items-center gap-1.5">
           <div className="bg-bg-muted flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] font-medium">
@@ -421,6 +425,7 @@ export default function AdminReportsPage() {
     {
       key: "company",
       header: "Company",
+      sortable: true,
       cell: (r) => (
         <span className="text-text-secondary text-xs">{r.company?.name ?? "\u2014"}</span>
       ),
@@ -626,7 +631,7 @@ export default function AdminReportsPage() {
         for (const id of reassignIds) {
           await api.patch(`/candidates/${id}`, { recruiterId });
         }
-        toast.success(`${reassignIds.size} candidates reassigned`);
+        toast.success(`${pluralize(reassignIds.size, "candidate")} reassigned`);
         setReassignIds(new Set());
         void fetchData();
       } catch {
@@ -641,7 +646,7 @@ export default function AdminReportsPage() {
       {/* Header */}
       <PageHeader
         title="Candidate Reports"
-        description={`${stats.total.toLocaleString()} total candidates`}
+        description={pluralize(stats.total, "candidate")}
       />
 
       {/* ── Summary Stats Cards ── */}

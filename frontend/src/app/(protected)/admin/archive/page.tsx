@@ -5,6 +5,7 @@ import { Archive, RotateCcw, Trash2, Play, FileText, Clock, Bell, Database } fro
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { exportToXLSX } from "@/utils/export-table";
+import { pluralize } from "@/utils/format";
 import {
   PageHeader,
   DataTable,
@@ -132,7 +133,7 @@ export default function ArchivePage() {
     try {
       const res = await api.post<{ archived: Record<string, number> }>("/archive/run");
       const total = Object.values(res.data.archived).reduce((sum, n) => sum + n, 0);
-      toast.success(`Archiving complete: ${total} records archived`);
+      toast.success(`Archiving complete: ${pluralize(total, "record")} archived`);
       void fetchData();
       void fetchStats();
     } catch {
@@ -143,11 +144,11 @@ export default function ArchivePage() {
   };
 
   const handleSort = useCallback(
-    (key: string) => {
-      setSortDir((prev) => (sortKey === key && prev === "asc" ? "desc" : "asc"));
-      setSortKey(key);
+    (key: string | null, dir: "asc" | "desc" | null) => {
+      setSortKey(key ?? "");
+      setSortDir(dir ?? "asc");
     },
-    [sortKey],
+    [],
   );
 
   const handleExport = useCallback(() => {
@@ -178,6 +179,11 @@ export default function ArchivePage() {
         case "archivedAt":
           aVal = new Date(a.archivedAt).getTime();
           bVal = new Date(b.archivedAt).getTime();
+          break;
+        case "entityId":
+        case "entityId_raw":
+          aVal = (a.entityId ?? "").toLowerCase();
+          bVal = (b.entityId ?? "").toLowerCase();
           break;
         default:
           return 0;
@@ -213,11 +219,13 @@ export default function ArchivePage() {
     {
       key: "entityId",
       header: "Record",
+      sortable: true,
       cell: (r) => <span className="text-text-primary text-sm">{getSnapshotLabel(r)}</span>,
     },
     {
       key: "entityId_raw",
       header: "ID",
+      sortable: true,
       cell: (r) => (
         <span className="text-text-muted font-mono text-xs">{r.entityId.slice(0, 12)}…</span>
       ),

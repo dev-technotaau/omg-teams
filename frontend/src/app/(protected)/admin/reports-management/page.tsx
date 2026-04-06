@@ -877,12 +877,12 @@ function HistoryTab() {
   }, [fetchHistory]);
 
   const handleSort = useCallback(
-    (key: string) => {
-      setSortDir((prev) => (sortKey === key && prev === "asc" ? "desc" : "asc"));
-      setSortKey(key);
+    (key: string | null, dir: "asc" | "desc" | null) => {
+      setSortKey(key ?? "");
+      setSortDir(dir ?? "asc");
       setPage(1);
     },
-    [sortKey],
+    [],
   );
 
   const columns: Column<HistoryEntry>[] = [
@@ -902,6 +902,7 @@ function HistoryTab() {
     {
       key: "source",
       header: "Source",
+      sortable: true,
       cell: (e) => (
         <Badge variant={e.source === "SCHEDULED" ? "success" : "warning"}>
           {e.source === "ON_PAGE" ? "On-Page" : "Scheduled"}

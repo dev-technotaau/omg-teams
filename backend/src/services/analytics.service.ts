@@ -721,7 +721,7 @@ export async function getEmployeeOverview() {
   const [totalActive, totalSuspended, recruiters, managers, presentToday, onLeaveToday] =
     await Promise.all([
       prisma.user.count({ where: { status: "ACTIVE", role: { not: "ADMIN" } } }),
-      prisma.user.count({ where: { status: "SUSPENDED" } }),
+      prisma.user.count({ where: { status: "SUSPENDED", role: { not: "ADMIN" } } }),
       prisma.user.count({ where: { role: "RECRUITER", status: "ACTIVE" } }),
       prisma.user.count({ where: { role: "REPORTING_MANAGER", status: "ACTIVE" } }),
       prisma.attendanceRecord.count({

@@ -45,13 +45,13 @@ import {
   Code,
   Subscript as SubIcon,
   Superscript as SupIcon,
-  Braces,
   Maximize2,
   Minimize2,
   FileCode,
   Search,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Select } from "@/components/ui";
 
 // ──────────────────────────────────────────────
 //  §29.4.1.3 — Tiptap Rich Text Editor
@@ -340,23 +340,22 @@ export function TiptapEditor({
         <ToolbarSep />
 
         {/* Font size + family */}
-        <select
-          className="border-border-default rounded border px-1.5 py-0.5 text-xs"
+        <Select
+          size="sm"
+          resetOnSelect
+          placeholder="Font"
+          options={FONT_FAMILIES.map((f) => ({ value: f, label: f }))}
           onChange={(e) => {
             if (e.target.value) editor.chain().focus().setFontFamily(e.target.value).run();
           }}
-          defaultValue=""
-        >
-          <option value="">Font</option>
-          {FONT_FAMILIES.map((f) => (
-            <option key={f} value={f}>
-              {f}
-            </option>
-          ))}
-        </select>
+          className="w-28"
+        />
 
-        <select
-          className="border-border-default rounded border px-1.5 py-0.5 text-xs"
+        <Select
+          size="sm"
+          resetOnSelect
+          placeholder="Size"
+          options={FONT_SIZES.map((s) => ({ value: String(s), label: `${s}pt` }))}
           onChange={(e) => {
             if (e.target.value) {
               editor
@@ -366,15 +365,8 @@ export function TiptapEditor({
                 .run();
             }
           }}
-          defaultValue=""
-        >
-          <option value="">Size</option>
-          {FONT_SIZES.map((s) => (
-            <option key={s} value={s}>
-              {s}pt
-            </option>
-          ))}
-        </select>
+          className="w-20"
+        />
 
         {/* Color pickers */}
         <input
@@ -421,25 +413,16 @@ export function TiptapEditor({
         {dynamicFields && dynamicFields.length > 0 && (
           <>
             <ToolbarSep />
-            <select
-              className="border-border-default rounded border px-1.5 py-0.5 text-xs"
+            <Select
+              size="sm"
+              resetOnSelect
+              placeholder="Insert Field…"
+              options={dynamicFields.map((f) => ({ value: f, label: `{{${f}}}` }))}
               onChange={(e) => {
-                if (e.target.value) {
-                  insertPlaceholder(e.target.value);
-                  e.target.value = "";
-                }
+                if (e.target.value) insertPlaceholder(e.target.value);
               }}
-              defaultValue=""
-            >
-              <option value="">
-                <Braces size={12} /> Insert Field...
-              </option>
-              {dynamicFields.map((f) => (
-                <option key={f} value={f}>
-                  {`{{${f}}}`}
-                </option>
-              ))}
-            </select>
+              className="w-36"
+            />
           </>
         )}
 
@@ -448,18 +431,11 @@ export function TiptapEditor({
         {/* §29.4.1.3 — Additional features: special chars, page break, full-screen, source view */}
         <ToolbarGroup>
           {/* Special characters */}
-          <select
-            className="border-border-default rounded border px-1 py-0.5 text-xs"
-            onChange={(e) => {
-              if (e.target.value) {
-                editor.chain().focus().insertContent(e.target.value).run();
-                e.target.value = "";
-              }
-            }}
-            defaultValue=""
-          >
-            <option value="">Sym</option>
-            {[
+          <Select
+            size="sm"
+            resetOnSelect
+            placeholder="Sym"
+            options={[
               "©",
               "™",
               "®",
@@ -480,30 +456,28 @@ export function TiptapEditor({
               "•",
               "…",
               "—",
-            ].map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
+            ].map((c) => ({ value: c, label: c }))}
+            onChange={(e) => {
+              if (e.target.value) {
+                editor.chain().focus().insertContent(e.target.value).run();
+              }
+            }}
+            className="w-20"
+          />
 
           {/* Line spacing */}
-          <select
-            className="border-border-default rounded border px-1 py-0.5 text-xs"
+          <Select
+            size="sm"
+            resetOnSelect
+            placeholder="Spacing"
+            options={["1", "1.15", "1.5", "2"].map((s) => ({ value: s, label: `${s}x` }))}
             onChange={(e) => {
               if (e.target.value) {
                 editor.chain().focus().setMark("textStyle", { lineHeight: e.target.value }).run();
               }
             }}
-            defaultValue=""
-          >
-            <option value="">Spacing</option>
-            {["1", "1.15", "1.5", "2"].map((s) => (
-              <option key={s} value={s}>
-                {s}x
-              </option>
-            ))}
-          </select>
+            className="w-24"
+          />
 
           {/* Page break */}
           <ToolbarBtn

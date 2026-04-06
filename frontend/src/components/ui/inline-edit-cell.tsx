@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Check, X, Pencil } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Select } from "./select";
 
 export interface InlineEditCellProps {
   value: string;
@@ -99,33 +100,27 @@ export function InlineEditCell({
   return (
     <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
       {type === "select" && options ? (
-        <select
-          ref={inputRef as React.RefObject<HTMLSelectElement>}
+        <Select
+          size="sm"
           value={editValue}
           onChange={(e) => {
-            setEditValue(e.target.value);
+            const newValue = e.target.value;
+            setEditValue(newValue);
             // Auto-save on select change
             void (async () => {
               setSaving(true);
               try {
-                await onSave(e.target.value);
+                await onSave(newValue);
                 setEditing(false);
               } finally {
                 setSaving(false);
               }
             })();
           }}
-          onBlur={handleCancel}
-          onKeyDown={handleKeyDown}
+          options={options}
           disabled={saving}
-          className="border-primary-500 bg-bg-input h-7 rounded border px-1.5 text-xs focus:outline-hidden"
-        >
-          {options.map((opt) => (
-            <option key={opt.value} value={opt.value}>
-              {opt.label}
-            </option>
-          ))}
-        </select>
+          className="min-w-32"
+        />
       ) : (
         <input
           ref={inputRef as React.RefObject<HTMLInputElement>}

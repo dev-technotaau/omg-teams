@@ -171,7 +171,7 @@ export async function listGeneratedReports(opts: HistoryQueryOpts) {
   }
 
   // Sorting
-  const validSortKeys = ["generatedAt", "reportName", "reportType", "fileSize"];
+  const validSortKeys = ["generatedAt", "reportName", "reportType", "fileSize", "source"];
   const sortBy = validSortKeys.includes(opts.sortBy ?? "") ? opts.sortBy! : "generatedAt";
   const sortDir = opts.sortDir === "asc" ? "asc" : "desc";
   const orderBy = { [sortBy]: sortDir } as Prisma.GeneratedReportOrderByWithRelationInput;

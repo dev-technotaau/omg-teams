@@ -172,6 +172,8 @@ export async function handleListCandidates(req: Request, res: Response): Promise
     dateFrom: q["dateFrom"] as string | undefined,
     dateTo: q["dateTo"] as string | undefined,
     search: q["search"] as string | undefined,
+    sortBy: q["sortBy"] as string | undefined,
+    sortDir: q["sortDir"] as "asc" | "desc" | undefined,
     page: q["page"] ? parseInt(q["page"] as string, 10) : undefined,
     limit: q["limit"] ? parseInt(q["limit"] as string, 10) : undefined,
   };

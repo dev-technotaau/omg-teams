@@ -16,6 +16,15 @@ export function formatNumber(n: number, locale = "en-IN"): string {
   return new Intl.NumberFormat(locale).format(n);
 }
 
+/**
+ * Pluralize a noun based on count. Returns "{count} {singular|plural}".
+ * If plural omitted, appends "s".
+ */
+export function pluralize(count: number, singular: string, plural?: string): string {
+  const word = count === 1 ? singular : (plural ?? `${singular}s`);
+  return `${formatNumber(count)} ${word}`;
+}
+
 /** Format a percentage with 1 decimal */
 export function formatPercent(value: number, decimals = 1): string {
   return `${value.toFixed(decimals)}%`;

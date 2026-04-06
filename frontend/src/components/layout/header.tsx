@@ -254,7 +254,7 @@ export function Header() {
 
   return (
     <>
-      <header className="border-border-default bg-bg-surface flex h-14 items-center justify-between border-b px-6">
+      <header className="border-border-default bg-bg-surface flex h-16 items-center justify-between border-b px-6 lg:px-8">
         {/* Left: Logo (mobile) + Command palette trigger / global search */}
         <div className="flex items-center gap-3">
           {/* Hamburger menu — mobile only, opens sidebar overlay */}

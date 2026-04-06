@@ -82,6 +82,11 @@ export interface CreateUserResult {
 export async function createUser(input: CreateUserInput): Promise<CreateUserResult> {
   const prisma = getPrisma();
 
+  // Hard guard: only one admin allowed (the seeded one). No code path may create another.
+  if ((input.role as string) === "ADMIN") {
+    throw new ForbiddenError("Admin accounts cannot be created");
+  }
+
   // Check for duplicate email
   const existingEmail = await prisma.user.findUnique({ where: { email: input.email } });
   if (existingEmail) {
@@ -179,22 +184,28 @@ export async function getUserById(userId: string) {
 /**
  * List all users with filtering.
  */
-const ALLOWED_USER_SORT_FIELDS = new Set([
-  "firstName",
-  "lastName",
-  "email",
-  "role",
-  "status",
-  "createdAt",
-  "employeeId",
-]);
+const USER_SORT_KEY_MAP: Record<string, string> = {
+  firstName: "firstName",
+  lastName: "lastName",
+  email: "email",
+  role: "role",
+  status: "status",
+  createdAt: "createdAt",
+  updatedAt: "updatedAt",
+  employeeId: "employeeId",
+  employee: "firstName",
+  name: "firstName",
+  lastActive: "lastActiveAt",
+  lastActiveAt: "lastActiveAt",
+};
 
 function resolveUserSort(
   sortBy?: string,
   sortDir?: "asc" | "desc",
 ): Record<string, "asc" | "desc"> {
-  if (sortBy && ALLOWED_USER_SORT_FIELDS.has(sortBy)) {
-    return { [sortBy]: sortDir ?? "desc" };
+  const mapped = sortBy ? USER_SORT_KEY_MAP[sortBy] : undefined;
+  if (mapped) {
+    return { [mapped]: sortDir ?? "desc" };
   }
   return { createdAt: "desc" };
 }
@@ -217,7 +228,13 @@ export async function listUsers(filters: {
   const skip = (page - 1) * limit;
 
   const where: Record<string, unknown> = {};
-  if (filters.role) where["role"] = filters.role;
+  if (filters.role) {
+    where["role"] = filters.role;
+  } else {
+    // By default, hide admin accounts from employee / user-management lists.
+    // Callers can still explicitly request ADMIN by passing `role: "ADMIN"`.
+    where["role"] = { not: "ADMIN" };
+  }
   if (filters.status) where["status"] = filters.status;
   else where["status"] = { not: "DELETED" };
 

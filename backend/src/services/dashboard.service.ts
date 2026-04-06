@@ -399,7 +399,7 @@ export async function getAdminDashboardStats(range = "today") {
   const [pendingLeaves, pendingDocs, suspendedAccounts] = await Promise.all([
     prisma.leaveRequest.count({ where: { status: "PENDING" } }),
     prisma.employeeDocument.count({ where: { status: "PENDING" } }),
-    prisma.user.count({ where: { status: "SUSPENDED" } }),
+    prisma.user.count({ where: { status: "SUSPENDED", role: { not: "ADMIN" } } }),
   ]);
 
   return {

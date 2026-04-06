@@ -59,7 +59,11 @@ export default function SessionManagementPage() {
 
   const fetchSessions = useCallback(async () => {
     try {
-      const result = await listSessions({ page, limit: DEFAULT_LARGE_PAGE_SIZE });
+      const result = await listSessions({
+        page,
+        limit: DEFAULT_LARGE_PAGE_SIZE,
+        ...(sortKey ? { sortBy: sortKey, sortDir } : {}),
+      });
       setSessions(result.data);
       setPagination(result.pagination);
     } catch (err) {
@@ -67,7 +71,7 @@ export default function SessionManagementPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [page]);
+  }, [page, sortKey, sortDir]);
 
   useEffect(() => {
     setIsLoading(true);
@@ -105,11 +109,11 @@ export default function SessionManagementPage() {
   };
 
   const handleSort = useCallback(
-    (key: string) => {
-      setSortDir((prev) => (sortKey === key && prev === "asc" ? "desc" : "asc"));
-      setSortKey(key);
+    (key: string | null, dir: "asc" | "desc" | null) => {
+      setSortKey(key ?? "");
+      setSortDir(dir ?? "asc");
     },
-    [sortKey],
+    [],
   );
 
   const handleExport = useCallback(() => {
@@ -202,6 +206,7 @@ export default function SessionManagementPage() {
     {
       key: "ipAddress",
       header: "IP Address",
+      sortable: true,
       cell: (s) => <span className="text-text-secondary">{s.ipAddress ?? "—"}</span>,
     },
     {

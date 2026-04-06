@@ -257,12 +257,12 @@ export default function UserManagementPage() {
   };
 
   const handleSort = useCallback(
-    (key: string) => {
-      setSortDir((prev) => (sortKey === key && prev === "asc" ? "desc" : "asc"));
-      setSortKey(key);
+    (key: string | null, dir: "asc" | "desc" | null) => {
+      setSortKey(key ?? "");
+      setSortDir(dir ?? "asc");
       setPage(1);
     },
-    [sortKey],
+    [],
   );
 
   const handleExport = useCallback(() => {
@@ -383,6 +383,7 @@ export default function UserManagementPage() {
       {
         key: "employee",
         header: "Employee",
+        sortable: true,
         cell: (user) => (
           <div className="flex items-center gap-3">
             <Avatar name={`${user.firstName} ${user.lastName}`} size="sm" />
@@ -831,20 +832,15 @@ export default function UserManagementPage() {
           {/* §6.3 — Assign Reporting Manager(s) during creation */}
           {rmOptions.length > 0 && (
             <FormField label="Assign Reporting Manager(s)" htmlFor="managerIds">
-              <select
+              <Select
                 id="managerIds"
                 name="managerIds"
                 multiple
-                className="border-border-default bg-bg-input text-text-primary focus:border-border-focus focus:ring-primary-500 w-full rounded-md border px-3 py-2 text-sm focus:ring-1 focus:outline-hidden"
-              >
-                {rmOptions.map((rm) => (
-                  <option key={rm.value} value={rm.value}>
-                    {rm.label}
-                  </option>
-                ))}
-              </select>
+                options={rmOptions}
+                placeholder="Select reporting managers..."
+              />
               <p className="text-text-muted mt-1 text-xs">
-                Hold Ctrl/Cmd to select multiple. Only applies to Recruiter role.
+                Click to select multiple. Only applies to Recruiter role.
               </p>
             </FormField>
           )}

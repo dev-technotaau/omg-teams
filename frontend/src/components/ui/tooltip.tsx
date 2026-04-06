@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 
@@ -39,46 +39,41 @@ export function Tooltip({ content, side = "top", children, delay = 200 }: Toolti
     setVisible(false);
   }, []);
 
-  // Position calculation
-  useEffect(() => {
-    if (!visible || !triggerRef.current) return;
-    const trigger = triggerRef.current;
-    const rect = trigger.getBoundingClientRect();
+  // Position calculation — useLayoutEffect runs synchronously after DOM mutation
+  // but before the browser paints, so the tooltip element is already in the DOM
+  // and has its intrinsic size available via getBoundingClientRect.
+  useLayoutEffect(() => {
+    if (!visible || !triggerRef.current || !tooltipRef.current) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    const tipRect = tooltipRef.current.getBoundingClientRect();
 
-    // Wait one frame so the tooltip element is in the DOM
-    requestAnimationFrame(() => {
-      const tooltip = tooltipRef.current;
-      if (!tooltip) return;
-      const tipRect = tooltip.getBoundingClientRect();
+    let top = 0;
+    let left = 0;
 
-      let top = 0;
-      let left = 0;
+    switch (side) {
+      case "top":
+        top = rect.top - tipRect.height - ARROW_SIZE - GAP;
+        left = rect.left + rect.width / 2 - tipRect.width / 2;
+        break;
+      case "bottom":
+        top = rect.bottom + ARROW_SIZE + GAP;
+        left = rect.left + rect.width / 2 - tipRect.width / 2;
+        break;
+      case "left":
+        top = rect.top + rect.height / 2 - tipRect.height / 2;
+        left = rect.left - tipRect.width - ARROW_SIZE - GAP;
+        break;
+      case "right":
+        top = rect.top + rect.height / 2 - tipRect.height / 2;
+        left = rect.right + ARROW_SIZE + GAP;
+        break;
+    }
 
-      switch (side) {
-        case "top":
-          top = rect.top - tipRect.height - ARROW_SIZE - GAP;
-          left = rect.left + rect.width / 2 - tipRect.width / 2;
-          break;
-        case "bottom":
-          top = rect.bottom + ARROW_SIZE + GAP;
-          left = rect.left + rect.width / 2 - tipRect.width / 2;
-          break;
-        case "left":
-          top = rect.top + rect.height / 2 - tipRect.height / 2;
-          left = rect.left - tipRect.width - ARROW_SIZE - GAP;
-          break;
-        case "right":
-          top = rect.top + rect.height / 2 - tipRect.height / 2;
-          left = rect.right + ARROW_SIZE + GAP;
-          break;
-      }
+    // Clamp to viewport (8px padding on all sides)
+    left = Math.max(8, Math.min(left, window.innerWidth - tipRect.width - 8));
+    top = Math.max(8, Math.min(top, window.innerHeight - tipRect.height - 8));
 
-      // Clamp to viewport
-      left = Math.max(8, Math.min(left, window.innerWidth - tipRect.width - 8));
-      top = Math.max(8, top);
-
-      setCoords({ top, left });
-    });
+    setCoords({ top, left });
   }, [visible, side]);
 
   // Clean up timer on unmount

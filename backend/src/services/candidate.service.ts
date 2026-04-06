@@ -224,6 +224,37 @@ export async function getCandidateReport(id: string) {
   return report;
 }
 
+const CANDIDATE_SORT_KEY_MAP: Record<string, Prisma.CandidateReportOrderByWithRelationInput> = {
+  globalSerialNumber: { globalSerialNumber: "asc" },
+  candidateName: { candidateName: "asc" },
+  candidateStage: { candidateStage: "asc" },
+  status: { status: "asc" },
+  createdAt: { createdAt: "desc" },
+  updatedAt: { updatedAt: "desc" },
+  zone: { zone: "asc" },
+  location: { location: "asc" },
+  state: { state: "asc" },
+  company: { company: { name: "asc" } },
+  recruiter: { recruiter: { firstName: "asc" } },
+};
+
+function resolveCandidateSort(
+  sortBy?: string,
+  sortDir?: "asc" | "desc",
+): Prisma.CandidateReportOrderByWithRelationInput {
+  const base = sortBy ? CANDIDATE_SORT_KEY_MAP[sortBy] : undefined;
+  if (!base) return { createdAt: "desc" };
+  const dir = sortDir ?? "desc";
+  // Rewrite the leaf direction
+  const entries = Object.entries(base);
+  const [key, val] = entries[0]!;
+  if (typeof val === "object" && val !== null) {
+    const [nestedKey] = Object.keys(val);
+    return { [key]: { [nestedKey!]: dir } } as Prisma.CandidateReportOrderByWithRelationInput;
+  }
+  return { [key]: dir } as Prisma.CandidateReportOrderByWithRelationInput;
+}
+
 export async function listCandidateReports(filters: {
   recruiterId?: string | undefined;
   recruiterIds?: string[] | undefined;
@@ -234,6 +265,8 @@ export async function listCandidateReports(filters: {
   dateFrom?: string | undefined;
   dateTo?: string | undefined;
   search?: string | undefined;
+  sortBy?: string | undefined;
+  sortDir?: "asc" | "desc" | undefined;
   page?: number | undefined;
   limit?: number | undefined;
 }) {
@@ -272,7 +305,7 @@ export async function listCandidateReports(filters: {
         recruiter: { select: { id: true, firstName: true, lastName: true, employeeId: true } },
         company: { select: { id: true, name: true } },
       },
-      orderBy: { createdAt: "desc" },
+      orderBy: resolveCandidateSort(filters.sortBy, filters.sortDir),
       skip,
       take: limit,
     }),

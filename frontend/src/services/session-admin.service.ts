@@ -20,11 +20,19 @@ export interface AdminSession {
   };
 }
 
-export async function listSessions(params?: { userId?: string; page?: number; limit?: number }) {
+export async function listSessions(params?: {
+  userId?: string;
+  page?: number;
+  limit?: number;
+  sortBy?: string;
+  sortDir?: "asc" | "desc";
+}) {
   const queryParams: Record<string, string> = {};
   if (params?.userId) queryParams["userId"] = params.userId;
   if (params?.page) queryParams["page"] = String(params.page);
   if (params?.limit) queryParams["limit"] = String(params.limit);
+  if (params?.sortBy) queryParams["sortBy"] = params.sortBy;
+  if (params?.sortDir) queryParams["sortDir"] = params.sortDir;
   const res = await api.get<{
     data: AdminSession[];
     pagination: { page: number; limit: number; total: number; totalPages: number };

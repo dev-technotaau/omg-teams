@@ -4,6 +4,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { LucideIcon } from "lucide-react";
 import {
+  ArrowDownAZ,
+  ArrowUpAZ,
   ChevronUp,
   ChevronDown,
   ChevronsUpDown,
@@ -22,6 +24,7 @@ import {
   ChevronRight as ChevronRightIcon,
 } from "lucide-react";
 import { Drawer } from "./drawer";
+import { Select } from "./select";
 import { cn } from "@/lib/utils";
 import { TableSkeleton } from "./skeleton";
 import { EmptyState } from "./empty-state";
@@ -58,7 +61,11 @@ export interface DataTableProps<T> {
   // Sorting
   sortKey?: string;
   sortDir?: "asc" | "desc";
-  onSort?: (key: string) => void;
+  /**
+   * Called when sort changes. `key` is `null` when the user clears sort
+   * (3-state cycle: none → asc → desc → none).
+   */
+  onSort?: (key: string | null, dir: "asc" | "desc" | null) => void;
   // Pagination
   page?: number;
   totalPages?: number;
@@ -596,28 +603,66 @@ export function DataTable<T>({
 
   return (
     <div ref={tableContainerRef} className={cn("w-full", className)}>
-      {/* Toolbar: group-by + export + view toggle + density + column visibility */}
+      {/* Toolbar: sort + group-by + export + view toggle + density + column visibility */}
       {(onExport ||
         onViewTypeChange ||
         onGroupByChange ||
         enableColumnVisibility ||
         onDensityChange ||
-        densityProp) && (
+        densityProp ||
+        (onSort && columns.some((c) => c.sortable))) && (
         <div className="mb-2 flex items-center justify-end gap-2">
+          {/* Sort by dropdown + direction toggle (mirrors clickable header sort) */}
+          {onSort && columns.some((c) => c.sortable) && (
+            <div className="flex items-center gap-1">
+              <Select
+                size="sm"
+                value={sortKey ?? ""}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  if (!next) {
+                    onSort(null, null);
+                  } else {
+                    onSort(next, sortDir ?? "asc");
+                  }
+                }}
+                options={[
+                  { value: "", label: "Sort by…" },
+                  ...columns
+                    .filter((c) => c.sortable)
+                    .map((c) => ({ value: c.key, label: c.header })),
+                ]}
+                className="w-auto min-w-36"
+              />
+              <button
+                type="button"
+                disabled={!sortKey}
+                onClick={() =>
+                  sortKey && onSort(sortKey, sortDir === "asc" ? "desc" : "asc")
+                }
+                className="border-border-default bg-bg-surface text-text-primary hover:bg-bg-hover inline-flex h-8 w-8 items-center justify-center rounded-md border transition disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label={sortDir === "desc" ? "Sort descending" : "Sort ascending"}
+                title={sortDir === "desc" ? "Descending" : "Ascending"}
+              >
+                {sortDir === "desc" ? <ArrowDownAZ size={14} /> : <ArrowUpAZ size={14} />}
+              </button>
+            </div>
+          )}
           {/* §12.3 — View By / group-by selector */}
           {onGroupByChange && groupByOptions && (
-            <select
+            <Select
+              size="sm"
               value={groupByKey ?? ""}
               onChange={(e) => onGroupByChange(e.target.value)}
-              className="border-border-default bg-bg-input text-text-primary focus:border-border-focus focus:ring-primary-500 h-8 rounded-md border px-2 text-xs focus:ring-1 focus:outline-hidden"
-            >
-              <option value="">{groupByLabel}: None</option>
-              {groupByOptions.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {groupByLabel}: {opt.label}
-                </option>
-              ))}
-            </select>
+              options={[
+                { value: "", label: `${groupByLabel}: None` },
+                ...groupByOptions.map((opt) => ({
+                  value: opt.value,
+                  label: `${groupByLabel}: ${opt.label}`,
+                })),
+              ]}
+              className="w-auto min-w-40"
+            />
           )}
           {onExport && (
             <button
@@ -819,6 +864,16 @@ export function DataTable<T>({
                 {visibleColumns.map((col) => {
                   const isSorted = sortKey === col.key;
                   const canSort = col.sortable && onSort;
+                  const cycleSort = () => {
+                    if (!onSort) return;
+                    if (sortKey !== col.key) {
+                      onSort(col.key, "asc");
+                    } else if (sortDir === "asc") {
+                      onSort(col.key, "desc");
+                    } else {
+                      onSort(null, null);
+                    }
+                  };
 
                   return (
                     <th
@@ -831,13 +886,13 @@ export function DataTable<T>({
                         canSort && "hover:text-text-primary cursor-pointer select-none",
                         col.className,
                       )}
-                      onClick={canSort ? () => onSort!(col.key) : undefined}
+                      onClick={canSort ? cycleSort : undefined}
                       onKeyDown={
                         canSort
                           ? (e: React.KeyboardEvent) => {
                               if (e.key === "Enter" || e.key === " ") {
                                 e.preventDefault();
-                                onSort!(col.key);
+                                cycleSort();
                               }
                             }
                           : undefined
@@ -987,9 +1042,10 @@ export function DataTable<T>({
               <label htmlFor="dt-page-size" className="text-text-muted text-xs">
                 Per page:
               </label>
-              <select
+              <Select
                 id="dt-page-size"
-                value={pageSize}
+                size="sm"
+                value={String(pageSize)}
                 onChange={(e) => {
                   const newSize = Number(e.target.value);
                   if (onPageSizeChange) {
@@ -1003,14 +1059,12 @@ export function DataTable<T>({
                     onPageChange(1);
                   }
                 }}
-                className="border-border-default bg-bg-input text-text-primary focus:border-border-focus focus:ring-primary-500 h-7 rounded-md border px-2 text-xs focus:ring-1 focus:outline-hidden"
-              >
-                {PAGE_SIZE_OPTIONS.map((opt) => (
-                  <option key={opt} value={opt}>
-                    {opt}
-                  </option>
-                ))}
-              </select>
+                options={PAGE_SIZE_OPTIONS.map((opt) => ({
+                  value: String(opt),
+                  label: String(opt),
+                }))}
+                className="w-20"
+              />
             </div>
           </div>
 

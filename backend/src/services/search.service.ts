@@ -132,6 +132,8 @@ export async function globalSearch(
   // Users — admin and RM
   if ((role === "ADMIN" || role === "REPORTING_MANAGER") && shouldSearch("users")) {
     const userWhere: Record<string, unknown> = {
+      // Exclude admin accounts from search results
+      role: { not: "ADMIN" },
       OR: [
         { firstName: { contains: query, mode: "insensitive" } },
         { lastName: { contains: query, mode: "insensitive" } },

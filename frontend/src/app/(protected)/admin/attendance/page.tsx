@@ -11,7 +11,7 @@ import {
   Timer,
   TrendingUp,
 } from "lucide-react";
-import { Card } from "@/components/ui";
+import { Card, Select } from "@/components/ui";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { exportToXLSX } from "@/utils/export-table";
@@ -308,34 +308,24 @@ export default function AdminAttendancePage() {
           showPresets
           size="md"
         />
-        <select
+        <Select
           value={statusFilter}
           onChange={(e) => {
             setStatusFilter(e.target.value);
             setPage(1);
           }}
-          className="border-border-default bg-bg-input rounded-md border px-3 py-2 text-sm"
-        >
-          {STATUS_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-        <select
+          options={STATUS_OPTIONS}
+          className="w-44"
+        />
+        <Select
           value={roleFilter}
           onChange={(e) => {
             setRoleFilter(e.target.value);
             setPage(1);
           }}
-          className="border-border-default bg-bg-input rounded-md border px-3 py-2 text-sm"
-        >
-          {ROLE_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
+          options={ROLE_OPTIONS}
+          className="w-44"
+        />
         <SearchInput
           value={search}
           onChange={(v) => {
@@ -498,12 +488,10 @@ export default function AdminAttendancePage() {
 
               <div>
                 <label className="text-text-muted mb-1 block text-xs">Status</label>
-                <select
+                <Select
                   value={editStatus}
                   onChange={(e) => setEditStatus(e.target.value)}
-                  className="border-border-default bg-bg-input w-full rounded-md border px-3 py-2 text-sm"
-                >
-                  {[
+                  options={[
                     "PRESENT_FULL",
                     "PRESENT_HALF",
                     "LATE",
@@ -513,12 +501,8 @@ export default function AdminAttendancePage() {
                     "HOLIDAY",
                     "WEEKEND",
                     "OVERTIME",
-                  ].map((s) => (
-                    <option key={s} value={s}>
-                      {s.replace(/_/g, " ")}
-                    </option>
-                  ))}
-                </select>
+                  ].map((s) => ({ value: s, label: s.replace(/_/g, " ") }))}
+                />
               </div>
 
               <div>

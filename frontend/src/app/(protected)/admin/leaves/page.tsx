@@ -16,7 +16,7 @@ import {
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { exportToXLSX } from "@/utils/export-table";
-import { Card, Checkbox } from "@/components/ui";
+import { Card, Checkbox, Select } from "@/components/ui";
 import { SearchInput } from "@/components/ui/search-input";
 import { TableSkeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -423,18 +423,15 @@ export default function AdminLeavesPage() {
               historyKey="leaves"
               className="max-w-xs flex-1"
             />
-            <select
+            <Select
               value={leaveTypeFilter}
               onChange={(e) => setLeaveTypeFilter(e.target.value)}
-              className="border-border-default bg-bg-input rounded-md border px-3 py-2 text-sm"
-            >
-              <option value="">All Types</option>
-              {leaveTypes.map((t) => (
-                <option key={t.id} value={t.code}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
+              options={[
+                { value: "", label: "All Types" },
+                ...leaveTypes.map((t) => ({ value: t.code, label: t.name })),
+              ]}
+              className="w-48"
+            />
           </div>
 
           {/* Table */}
@@ -589,17 +586,15 @@ export default function AdminLeavesPage() {
       {activeTab === "balances" && (
         <>
           <div className="flex items-center gap-3">
-            <select
-              value={balanceYear}
+            <Select
+              value={String(balanceYear)}
               onChange={(e) => setBalanceYear(Number(e.target.value))}
-              className="border-border-default bg-bg-input rounded-md border px-3 py-2 text-sm"
-            >
-              {[2024, 2025, 2026, 2027].map((y) => (
-                <option key={y} value={y}>
-                  {y}
-                </option>
-              ))}
-            </select>
+              options={[2024, 2025, 2026, 2027].map((y) => ({
+                value: String(y),
+                label: String(y),
+              }))}
+              className="w-28"
+            />
           </div>
 
           {balancesLoading ? (
@@ -675,9 +670,10 @@ export default function AdminLeavesPage() {
                           {totalUsed}
                         </td>
                         <td className="px-4 py-3 text-center">
-                          <select
-                            className="border-border-default rounded border px-2 py-1 text-xs"
-                            defaultValue=""
+                          <Select
+                            size="sm"
+                            value=""
+                            placeholder="Adjust..."
                             onChange={(e) => {
                               const leaveTypeId = e.target.value;
                               if (!leaveTypeId) return;
@@ -688,16 +684,10 @@ export default function AdminLeavesPage() {
                                 leaveTypeId,
                                 leaveTypeName: lt?.name ?? "",
                               });
-                              e.target.value = "";
                             }}
-                          >
-                            <option value="">Adjust...</option>
-                            {leaveTypes.map((t) => (
-                              <option key={t.id} value={t.id}>
-                                {t.code}
-                              </option>
-                            ))}
-                          </select>
+                            options={leaveTypes.map((t) => ({ value: t.id, label: t.code }))}
+                            className="w-28"
+                          />
                         </td>
                       </tr>
                     );

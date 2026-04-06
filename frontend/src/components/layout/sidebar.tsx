@@ -225,41 +225,55 @@ export function Sidebar() {
         )}
       >
         {/* Logo + Brand */}
-        <div className="flex h-14 items-center justify-between border-b border-border-sidebar px-3">
-          <Link href="/" className="min-w-0 flex-1 overflow-hidden">
-            {sidebarOpen ? (
-              /* Expanded: show full wide logo (emblem + company name + tagline) */
-              /* eslint-disable-next-line @next/next/no-img-element */
-              <img
-                src={theme === "dark" ? "/icons/logo.png" : "/icons/logo-light-theme.png"}
-                alt="OMG Teams"
-                className="h-10 w-auto object-contain"
-                onError={(e) => {
-                  (e.target as HTMLImageElement).style.display = "none";
-                  const fallback = (e.target as HTMLImageElement).nextElementSibling;
-                  if (fallback) (fallback as HTMLElement).style.display = "block";
-                }}
-              />
-            ) : (
-              /* Collapsed: show square logo icon */
-              /* eslint-disable-next-line @next/next/no-img-element */
+        <div
+          className={cn(
+            "flex h-16 items-center border-b border-border-sidebar",
+            sidebarOpen ? "justify-between px-3" : "justify-center",
+          )}
+        >
+          {sidebarOpen ? (
+            <>
+              <Link href="/" className="min-w-0 flex-1 overflow-hidden">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={theme === "dark" ? "/icons/logo.png" : "/icons/logo-light-theme.png"}
+                  alt="OMG Teams"
+                  className="mt-1 h-10 w-auto object-contain"
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).style.display = "none";
+                    const fallback = (e.target as HTMLImageElement).nextElementSibling;
+                    if (fallback) (fallback as HTMLElement).style.display = "block";
+                  }}
+                />
+              </Link>
+              <button
+                onClick={toggleSidebar}
+                aria-label="Collapse sidebar"
+                className="text-text-sidebar hover:text-text-sidebar-active shrink-0 rounded-sm p-1 hover:bg-bg-hover"
+              >
+                <ChevronLeft size={18} />
+              </button>
+            </>
+          ) : (
+            // Collapsed: click-to-expand logo button (larger, centered)
+            <button
+              onClick={toggleSidebar}
+              aria-label="Expand sidebar"
+              title="Expand sidebar"
+              className="hover:bg-bg-hover flex h-12 w-12 items-center justify-center rounded-md transition-colors"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={theme === "dark" ? "/icons/logo-collapsed.png" : "/icons/logo-collapsed-light-theme.png"}
                 alt="OMG"
-                className="h-8 w-8 object-contain"
+                className="mt-0.5 h-10 w-10 object-contain"
               />
-            )}
-          </Link>
-          <button
-            onClick={toggleSidebar}
-            className="text-text-sidebar hover:text-text-sidebar-active shrink-0 rounded-sm p-1 hover:bg-bg-hover"
-          >
-            {sidebarOpen ? <ChevronLeft size={18} /> : <ChevronRight size={18} />}
-          </button>
+            </button>
+          )}
         </div>
 
         {/* Nav Items */}
-        <nav className="flex-1 overflow-y-auto py-2">
+        <nav className="flex-1 overflow-y-auto py-3">
           {filteredItems.map((item) => {
             const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
             const Icon = item.icon;
@@ -270,7 +284,7 @@ export function Sidebar() {
                 href={item.href}
                 title={!sidebarOpen ? item.label : undefined}
                 className={cn(
-                  "mx-2 my-0.5 flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
+                  "mx-2 my-1 flex items-center gap-3 rounded-md px-3 py-2.5 text-sm transition-colors",
                   isActive
                     ? "bg-primary-500/20 text-text-sidebar-active font-medium"
                     : "text-text-sidebar hover:text-text-sidebar-active hover:bg-bg-hover",
@@ -291,7 +305,7 @@ export function Sidebar() {
 
         {/* User info at bottom */}
         {sidebarOpen && user && (
-          <div className="border-t border-border-sidebar p-4">
+          <div className="border-t border-border-sidebar p-5">
             <p className="text-text-sidebar truncate text-xs">{user.name}</p>
             <p className="text-text-muted truncate text-xs">{user.role.replace("_", " ")}</p>
           </div>

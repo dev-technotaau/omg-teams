@@ -3,6 +3,7 @@
 import React, { useMemo } from "react";
 import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Select } from "./select";
 
 export interface PaginationProps {
   page: number;
@@ -73,18 +74,14 @@ export function Pagination({
             <label htmlFor="page-size-select" className="text-text-muted text-sm">
               Per page:
             </label>
-            <select
+            <Select
               id="page-size-select"
-              value={pageSize}
+              size="sm"
+              value={String(pageSize)}
               onChange={(e) => onPageSizeChange(Number(e.target.value))}
-              className="border-border-default bg-bg-input text-text-primary focus:border-border-focus focus:ring-primary-500 h-8 rounded-md border px-2 text-sm focus:ring-1 focus:outline-hidden"
-            >
-              {pageSizeOptions.map((opt) => (
-                <option key={opt} value={opt}>
-                  {opt}
-                </option>
-              ))}
-            </select>
+              options={pageSizeOptions.map((opt) => ({ value: String(opt), label: String(opt) }))}
+              className="w-20"
+            />
           </div>
         )}
       </div>

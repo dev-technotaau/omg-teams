@@ -11,25 +11,35 @@ const OFFLINE_URL = "/offline.html";
 const PRECACHE_URLS = [OFFLINE_URL];
 
 // ── Install: pre-cache offline page ──
+// Note: we do NOT call self.skipWaiting() here — the new SW stays in the
+// "waiting" state until the page explicitly asks it to take over (via the
+// SKIP_WAITING message below). This prevents the "Update available" banner
+// from racing and showing on every page load.
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_URLS)),
   );
-  self.skipWaiting();
 });
 
-// ── Activate: clean old caches ──
+// ── Activate: clean old caches + take over open tabs ──
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(
-        keys
-          .filter((key) => key !== CACHE_NAME)
-          .map((key) => caches.delete(key)),
+    Promise.all([
+      caches.keys().then((keys) =>
+        Promise.all(
+          keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key)),
+        ),
       ),
-    ),
+      self.clients.claim(),
+    ]),
   );
-  self.clients.claim();
+});
+
+// ── Message handler: allows the page to trigger skipWaiting on user action ──
+self.addEventListener("message", (event) => {
+  if (event.data?.type === "SKIP_WAITING") {
+    self.skipWaiting();
+  }
 });
 
 // ── Fetch: network-first with offline fallback ──

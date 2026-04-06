@@ -45,6 +45,7 @@ import {
 import type { Column, ViewType, RowDensity } from "@/components/ui";
 import { TiptapEditor } from "@/components/tiptap-editor";
 import { cn } from "@/lib/utils";
+import { pluralize } from "@/utils/format";
 
 // ──────────────────────────────────────────────
 //  Admin Offer Letters — Spec Section 29.4
@@ -480,7 +481,7 @@ export default function AdminOfferLettersPage() {
       {/* Header */}
       <PageHeader
         title="Offer Letters"
-        description={`${pagination.total} total offer letters`}
+        description={pluralize(pagination.total, "offer letter")}
         actions={
           <Button leftIcon={Plus} onClick={openCreate}>
             Generate Offer Letter

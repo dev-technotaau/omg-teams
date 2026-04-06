@@ -38,7 +38,7 @@ import type { Column, ViewType, RowDensity } from "@/components/ui";
 import { api } from "@/lib/api";
 import { ROLE_FILTER_OPTIONS } from "@/constants/roles";
 import { USER_STATUS_BADGE, USER_STATUS_FILTER_OPTIONS } from "@/constants/statuses";
-import { snakeToTitle } from "@/utils/format";
+import { snakeToTitle, pluralize } from "@/utils/format";
 import { DEFAULT_LARGE_PAGE_SIZE } from "@/constants/pagination";
 import { useDebounce } from "@/hooks";
 import { useFilterPresets } from "@/hooks/use-filter-presets";
@@ -161,12 +161,12 @@ export default function EmployeesPage() {
   };
 
   const handleSort = useCallback(
-    (key: string) => {
-      setSortDir((prev) => (sortKey === key && prev === "asc" ? "desc" : "asc"));
-      setSortKey(key);
+    (key: string | null, dir: "asc" | "desc" | null) => {
+      setSortKey(key ?? "");
+      setSortDir(dir ?? "asc");
       setPage(1);
     },
-    [sortKey],
+    [],
   );
 
   const handleBulkSuspend = useCallback(
@@ -316,6 +316,7 @@ export default function EmployeesPage() {
     {
       key: "name",
       header: "Employee",
+      sortable: true,
       cell: (emp) => {
         const presence = presenceMap[emp.id];
         const dotClass = getPresenceDotClass(presence?.status ?? "offline");
@@ -486,6 +487,7 @@ export default function EmployeesPage() {
     {
       key: "lastActive",
       header: "Last Active",
+      sortable: true,
       defaultHidden: true,
       cell: (emp) => {
         if (!emp.lastActive) return <span className="text-text-muted text-xs">{"\u2014"}</span>;
@@ -617,7 +619,7 @@ export default function EmployeesPage() {
     <div className="space-y-4">
       <PageHeader
         title="Employees"
-        description={`${stats.total.toLocaleString()} total employees`}
+        description={pluralize(stats.total, "employee")}
       />
 
       {/* ── Summary Stats Cards ── */}

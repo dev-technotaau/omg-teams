@@ -8,16 +8,27 @@ export async function handleListSessions(req: Request, res: Response): Promise<v
   const page = req.query["page"] ? parseInt(req.query["page"] as string, 10) : 1;
   const limit = req.query["limit"] ? parseInt(req.query["limit"] as string, 10) : 25;
   const userId = req.query["userId"] as string | undefined;
+  const sortBy = req.query["sortBy"] as string | undefined;
+  const sortDir = (req.query["sortDir"] as "asc" | "desc" | undefined) ?? "desc";
 
   const where: Record<string, unknown> = { revokedAt: null };
   if (userId) where["userId"] = userId;
+
+  const SESSION_SORT_KEY_MAP: Record<string, Record<string, unknown>> = {
+    user: { user: { firstName: sortDir } },
+    role: { user: { role: sortDir } },
+    ipAddress: { ipAddress: sortDir },
+    createdAt: { createdAt: sortDir },
+    lastActiveAt: { lastActiveAt: sortDir },
+  };
+  const orderBy = (sortBy && SESSION_SORT_KEY_MAP[sortBy]) || { lastActiveAt: "desc" };
 
   const [sessions, total] = await Promise.all([
     prisma.session.findMany({
       where: where as never,
       skip: (page - 1) * limit,
       take: limit,
-      orderBy: { lastActiveAt: "desc" },
+      orderBy: orderBy as never,
       include: {
         user: {
           select: { id: true, firstName: true, lastName: true, employeeId: true, role: true },

@@ -179,11 +179,11 @@ export default function AuditLogPage() {
   };
 
   const handleSort = useCallback(
-    (key: string) => {
-      setSortDir((prev) => (sortKey === key && prev === "asc" ? "desc" : "asc"));
-      setSortKey(key);
+    (key: string | null, dir: "asc" | "desc" | null) => {
+      setSortKey(key ?? "");
+      setSortDir(dir ?? "asc");
     },
-    [sortKey],
+    [],
   );
 
   const handleTableExport = useCallback(() => {
@@ -219,6 +219,22 @@ export default function AuditLogPage() {
         case "timestamp":
           aVal = new Date(a.timestamp).getTime();
           bVal = new Date(b.timestamp).getTime();
+          break;
+        case "userName":
+          aVal = (a.userName ?? "").toLowerCase();
+          bVal = (b.userName ?? "").toLowerCase();
+          break;
+        case "userRole":
+          aVal = (a.userRole ?? "").toLowerCase();
+          bVal = (b.userRole ?? "").toLowerCase();
+          break;
+        case "entityId":
+          aVal = (a.entityId ?? "").toLowerCase();
+          bVal = (b.entityId ?? "").toLowerCase();
+          break;
+        case "ipAddress":
+          aVal = (a.ipAddress ?? "").toLowerCase();
+          bVal = (b.ipAddress ?? "").toLowerCase();
           break;
         default:
           return 0;
@@ -285,11 +301,13 @@ export default function AuditLogPage() {
     {
       key: "userName",
       header: "User",
+      sortable: true,
       cell: (row) => <span className="text-text-primary">{row.userName}</span>,
     },
     {
       key: "userRole",
       header: "Role",
+      sortable: true,
       cell: (row) => (
         <Badge variant="default" size="sm">
           {row.userRole.replace(/_/g, " ")}
@@ -319,11 +337,13 @@ export default function AuditLogPage() {
     {
       key: "entityId",
       header: "Entity ID",
+      sortable: true,
       cell: (row) => <span className="text-text-muted font-mono text-xs">{row.entityId}</span>,
     },
     {
       key: "ipAddress",
       header: "IP Address",
+      sortable: true,
       cell: (row) => <span className="text-text-muted font-mono text-xs">{row.ipAddress}</span>,
     },
   ];
