@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo } from "react";
+import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
 import { Archive, RotateCcw, Trash2, Play, FileText, Clock, Bell, Database } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
@@ -52,12 +54,8 @@ const ENTITY_LABELS: Record<string, string> = {
 };
 
 export default function ArchivePage() {
-  const [data, setData] = useState<ArchivedRecord[]>([]);
-  const [stats, setStats] = useState<ArchiveStat[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const qc = useQueryClient();
   const [page, setPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
-  const [total, setTotal] = useState(0);
   const [entityFilter, setEntityFilter] = useState("");
   const [search, setSearch] = useState("");
   const [isRunning, setIsRunning] = useState(false);
@@ -66,9 +64,9 @@ export default function ArchivePage() {
   const [viewType, setViewType] = useState<ViewType>("table");
   const [density, setDensity] = useState<RowDensity>("default");
 
-  const fetchData = useCallback(async () => {
-    setIsLoading(true);
-    try {
+  const archiveQuery = useQuery({
+    queryKey: qk.archive.list({ page, entityFilter, search }),
+    queryFn: async () => {
       const params: Record<string, string> = { page: String(page), limit: "25" };
       if (entityFilter) params["entityType"] = entityFilter;
       if (search) params["search"] = search;
@@ -76,29 +74,31 @@ export default function ArchivePage() {
         data: ArchivedRecord[];
         pagination: { page: number; totalPages: number; total: number };
       }>("/archive", { params });
-      setData(res.data.data);
-      setTotalPages(res.data.pagination.totalPages);
-      setTotal(res.data.pagination.total);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [page, entityFilter, search]);
+      return res.data;
+    },
+    placeholderData: keepPreviousData,
+  });
+  const data = useMemo(() => archiveQuery.data?.data ?? [], [archiveQuery.data]);
+  const totalPages = archiveQuery.data?.pagination.totalPages ?? 1;
+  const total = archiveQuery.data?.pagination.total ?? 0;
+  const isLoading = archiveQuery.isLoading;
+  const fetchData = useCallback(
+    () => qc.invalidateQueries({ queryKey: qk.archive.lists() }),
+    [qc],
+  );
 
-  const fetchStats = useCallback(async () => {
-    try {
+  const statsQuery = useQuery({
+    queryKey: [...qk.archive.all(), "stats"] as const,
+    queryFn: async () => {
       const res = await api.get<{ stats: ArchiveStat[] }>("/archive/stats");
-      setStats(res.data.stats);
-    } catch {
-      /* silent */
-    }
-  }, []);
-
-  useEffect(() => {
-    void fetchData();
-  }, [fetchData]);
-  useEffect(() => {
-    void fetchStats();
-  }, [fetchStats]);
+      return res.data.stats;
+    },
+  });
+  const stats = statsQuery.data ?? [];
+  const fetchStats = useCallback(
+    () => qc.invalidateQueries({ queryKey: [...qk.archive.all(), "stats"] }),
+    [qc],
+  );
 
   const handleRestore = useCallback(
     async (id: string) => {

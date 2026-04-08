@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState } from "react";
+import { useQuery, keepPreviousData } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
 import { CalendarDays } from "lucide-react";
 import { api } from "@/lib/api";
 import { TableSkeleton } from "@/components/ui/skeleton";
@@ -16,31 +18,24 @@ import type { PaginatedResponse } from "@/types/api";
 // ──────────────────────────────────────────────
 
 export default function TeamLeavesPage() {
-  const [data, setData] = useState<PaginatedResponse<LeaveRequest> | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState("");
   const [page, setPage] = useState(1);
 
-  const fetchData = useCallback(async () => {
-    setIsLoading(true);
-    try {
+  const teamQuery = useQuery({
+    queryKey: qk.leaves.list({ scope: "team", page, statusFilter }),
+    queryFn: async () => {
       const params: Record<string, string> = {
         page: String(page),
         limit: String(DEFAULT_LARGE_PAGE_SIZE),
       };
       if (statusFilter) params["status"] = statusFilter;
       const res = await api.get<PaginatedResponse<LeaveRequest>>("/leaves/team", { params });
-      setData(res.data);
-    } catch {
-      /* silent */
-    } finally {
-      setIsLoading(false);
-    }
-  }, [page, statusFilter]);
-
-  useEffect(() => {
-    void fetchData();
-  }, [fetchData]);
+      return res.data;
+    },
+    placeholderData: keepPreviousData,
+  });
+  const data = teamQuery.data ?? null;
+  const isLoading = teamQuery.isLoading;
 
   const requests = data?.data ?? [];
   const pendingCount = requests.filter((r) => r.status === "PENDING").length;

@@ -32,6 +32,7 @@ export async function createUser(data: {
   mobileNumber?: string;
   address?: string;
   managerIds?: string[];
+  recruiterIds?: string[];
 }) {
   const res = await api.post<{
     user: {
@@ -43,6 +44,7 @@ export async function createUser(data: {
       role: string;
       plainPassword: string;
       assignedManagers: string[];
+      assignedRecruiters: string[];
     };
   }>("/users", data);
   return res.data.user;

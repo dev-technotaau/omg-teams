@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { api } from "@/lib/api";
@@ -24,7 +24,6 @@ import {
   Database,
   Shield,
   ChevronLeft,
-  ChevronRight,
   Copy,
   Upload,
   Monitor,
@@ -71,6 +70,7 @@ const NAV_ITEMS: NavItem[] = [
   // ── Recruiter ──
   { label: "Add Report", href: ROUTES.REPORTS_NEW, icon: FilePlus, roles: [ROLES.RECRUITER] },
   { label: "My Reports", href: ROUTES.REPORTS, icon: FileText, roles: [ROLES.RECRUITER] },
+  { label: "My Targets", href: ROUTES.MY_TARGETS, icon: Target, roles: [ROLES.RECRUITER] },
 
   // ── Reporting Manager ──
   {
@@ -90,6 +90,12 @@ const NAV_ITEMS: NavItem[] = [
     label: "Team Leaves",
     href: ROUTES.TEAM_LEAVES,
     icon: CalendarDays,
+    roles: [ROLES.REPORTING_MANAGER],
+  },
+  {
+    label: "Team Targets",
+    href: ROUTES.TEAM_TARGETS,
+    icon: Target,
     roles: [ROLES.REPORTING_MANAGER],
   },
 
@@ -165,13 +171,60 @@ const NAV_ITEMS: NavItem[] = [
   { label: "Settings", href: ROUTES.ADMIN_SETTINGS, icon: Settings, roles: [ROLES.ADMIN] },
 ];
 
+/** sessionStorage key for the sidebar nav scroll position. Sidebar is
+ *  one global widget so a single key (not per-pathname) is correct. */
+const SIDEBAR_SCROLL_KEY = "omg.sidebar.scrollTop";
+
 export function Sidebar() {
   const pathname = usePathname();
-  const { theme } = useTheme();
+  const { resolvedTheme } = useTheme();
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    // reason: legitimate hydration pattern — flip mount flag once on client
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setMounted(true);
+  }, []);
+  const isDark = mounted && resolvedTheme === "dark";
   const { user } = useAuth();
   const { sidebarOpen, toggleSidebar } = useUIStore();
   const isMobile = useIsMobile();
   const [pendingDocCount, setPendingDocCount] = useState(0);
+
+  // ── Persist + restore the scroll position of the nav list ──
+  // Browser-native scroll restoration only works on body/html scroll,
+  // not on inner containers, so the sidebar nav (which is what holds
+  // the long list of links like Settings) loses its position on every
+  // reload. We persist the scrollTop in sessionStorage and restore on
+  // mount so the active link stays in view across reloads.
+  const navRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    const nav = navRef.current;
+    if (!nav) return;
+    try {
+      const saved = sessionStorage.getItem(SIDEBAR_SCROLL_KEY);
+      if (saved) nav.scrollTop = Number(saved);
+    } catch {
+      /* sessionStorage may be unavailable in private mode — ignore */
+    }
+    let raf = 0;
+    const handler = () => {
+      // rAF-throttle the writes — scroll fires 60+ times per second
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        try {
+          sessionStorage.setItem(SIDEBAR_SCROLL_KEY, String(nav.scrollTop));
+        } catch {
+          /* ignore */
+        }
+      });
+    };
+    nav.addEventListener("scroll", handler, { passive: true });
+    return () => {
+      nav.removeEventListener("scroll", handler);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, []);
 
   const role = user?.role ?? "";
 
@@ -236,7 +289,7 @@ export function Sidebar() {
               <Link href="/" className="min-w-0 flex-1 overflow-hidden">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
-                  src={theme === "dark" ? "/icons/logo.png" : "/icons/logo-light-theme.png"}
+                  src={isDark ? "/icons/logo.png" : "/icons/logo-light-theme.png"}
                   alt="OMG Teams"
                   className="mt-1 h-10 w-auto object-contain"
                   onError={(e) => {
@@ -264,7 +317,7 @@ export function Sidebar() {
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src={theme === "dark" ? "/icons/logo-collapsed.png" : "/icons/logo-collapsed-light-theme.png"}
+                src={isDark ? "/icons/logo-collapsed.png" : "/icons/logo-collapsed-light-theme.png"}
                 alt="OMG"
                 className="mt-0.5 h-10 w-10 object-contain"
               />
@@ -273,7 +326,7 @@ export function Sidebar() {
         </div>
 
         {/* Nav Items */}
-        <nav className="flex-1 overflow-y-auto py-3">
+        <nav ref={navRef} className="flex-1 overflow-y-auto py-3">
           {filteredItems.map((item) => {
             const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
             const Icon = item.icon;
@@ -282,6 +335,9 @@ export function Sidebar() {
               <Link
                 key={item.href}
                 href={item.href}
+                onClick={() => {
+                  if (isMobile) toggleSidebar();
+                }}
                 title={!sidebarOpen ? item.label : undefined}
                 className={cn(
                   "mx-2 my-1 flex items-center gap-3 rounded-md px-3 py-2.5 text-sm transition-colors",

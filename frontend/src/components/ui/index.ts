@@ -8,6 +8,7 @@ export { Button, IconButton } from "./button";
 
 // Form Inputs
 export { Input } from "./input";
+export { PhoneInput, isValidPhone } from "./phone-input";
 export { Textarea } from "./textarea";
 export { Select } from "./select";
 export { Checkbox } from "./checkbox";

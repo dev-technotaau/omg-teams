@@ -299,31 +299,37 @@ export const CalendarDatePicker = React.forwardRef<HTMLInputElement, CalendarDat
         {/* Hidden native input for form compatibility */}
         <input ref={ref} type="hidden" name={inputId} value={value} />
 
-        {/* Trigger button */}
-        <button
-          ref={triggerRef}
-          type="button"
-          id={inputId}
-          disabled={disabled}
-          onClick={() => setOpen((v) => !v)}
-          aria-haspopup="dialog"
-          aria-expanded={open}
-          data-invalid={!!error || undefined}
-          aria-describedby={error ? `${inputId}-error` : helpText ? `${inputId}-help` : undefined}
-          className={cn(
-            "bg-bg-input text-text-primary w-full rounded-md pr-3 pl-9 text-left",
-            "border-border-default border transition-colors",
-            "focus:border-border-focus focus:ring-primary-500 focus:ring-1 focus:outline-hidden",
-            "disabled:cursor-not-allowed disabled:opacity-50",
-            sizeClasses[size],
-            !displayValue && "text-text-muted",
-            error && "border-error-500 focus:border-error-500 focus:ring-error-500",
-          )}
-        >
-          <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-2.5">
+        {/* Trigger wrapper — `relative` lives on this div (not the button)
+            so the absolute icons have a guaranteed positioning context. A
+            previous bug placed them on the button, which in some browser
+            contexts wasn't establishing a containing block, letting the
+            calendar icon escape upward to the modal body. */}
+        <div className="relative w-full">
+          <span className="pointer-events-none absolute inset-y-0 left-0 z-10 flex items-center pl-2.5">
             <Calendar size={16} className="text-text-muted" aria-hidden="true" />
           </span>
-          <span className="truncate">{displayValue || placeholder}</span>
+          <button
+            ref={triggerRef}
+            type="button"
+            id={inputId}
+            disabled={disabled}
+            onClick={() => setOpen((v) => !v)}
+            aria-haspopup="dialog"
+            aria-expanded={open}
+            data-invalid={!!error || undefined}
+            aria-describedby={error ? `${inputId}-error` : helpText ? `${inputId}-help` : undefined}
+            className={cn(
+              "bg-bg-input text-text-primary w-full rounded-md pr-8 pl-9 text-left",
+              "border-border-default border transition-colors",
+              "focus:border-border-focus focus:ring-primary-500 focus:ring-1 focus:outline-hidden",
+              "disabled:cursor-not-allowed disabled:opacity-50",
+              sizeClasses[size],
+              !displayValue && "text-text-muted",
+              error && "border-error-500 focus:border-error-500 focus:ring-error-500",
+            )}
+          >
+            <span className="truncate">{displayValue || placeholder}</span>
+          </button>
           {clearable && value && !disabled && (
             <span
               role="button"
@@ -332,13 +338,13 @@ export const CalendarDatePicker = React.forwardRef<HTMLInputElement, CalendarDat
                 e.stopPropagation();
                 onChange?.("");
               }}
-              className="text-text-muted hover:text-text-primary absolute inset-y-0 right-0 flex items-center pr-2"
+              className="text-text-muted hover:text-text-primary absolute inset-y-0 right-0 z-10 flex items-center pr-2"
               aria-label="Clear date"
             >
               <X size={14} />
             </span>
           )}
-        </button>
+        </div>
 
         {error && (
           <p id={`${inputId}-error`} role="alert" className="text-error-500 mt-1 text-xs">

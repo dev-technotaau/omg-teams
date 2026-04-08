@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { Plus, Pencil, Trash2, CalendarDays, RefreshCw, Globe, MapPin, Star } from "lucide-react";
 import { toast } from "sonner";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   listHolidays,
   createHoliday,
@@ -10,6 +11,8 @@ import {
   deleteHoliday,
   type Holiday,
 } from "@/services/holiday.service";
+import { qk } from "@/lib/query-keys";
+import { toastApiError } from "@/lib/query-helpers";
 import {
   PageHeader,
   Button,
@@ -44,8 +47,7 @@ const DOT_COLORS = HOLIDAY_DOT_COLORS;
 const emptyForm = { date: "", name: "", type: "NATIONAL" as Holiday["type"], isRecurring: false };
 
 export default function AdminHolidaysPage() {
-  const [holidays, setHolidays] = useState<Holiday[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const qc = useQueryClient();
   const [year, setYear] = useState(new Date().getFullYear());
   const [modal, setModal] = useState<"add" | "edit" | null>(null);
   const [form, setForm] = useState(emptyForm);
@@ -55,21 +57,86 @@ export default function AdminHolidaysPage() {
   const [density, setDensity] = useState<RowDensity>("default");
   const [pinnedIds, setPinnedIds] = useState<Set<string>>(new Set());
 
-  const fetchData = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      const data = await listHolidays(year);
-      setHolidays(data);
-    } catch {
-      toast.error("Failed to load holidays");
-    } finally {
-      setIsLoading(false);
-    }
-  }, [year]);
+  // ── Server state via TanStack Query ──
+  // Keyed by year so each tab navigation hits cache instantly. Background
+  // refetches on focus keep the table fresh without skeletons.
+  const { data: holidays = [], isLoading } = useQuery({
+    queryKey: qk.holidays.list({ year }),
+    queryFn: () => listHolidays(year),
+  });
 
-  useEffect(() => {
-    void fetchData();
-  }, [fetchData]);
+  // Helper used by mutations to invalidate every cached holiday list
+  // (every year combo) after a write succeeds.
+  const invalidateHolidays = useCallback(
+    () => qc.invalidateQueries({ queryKey: qk.holidays.lists() }),
+    [qc],
+  );
+
+  // Optimistic create — prepend to the current year's cache before the
+  // server confirms, snapshot for rollback, and reconcile on settle.
+  const createMutation = useMutation({
+    mutationFn: createHoliday,
+    onMutate: async (vars) => {
+      const key = qk.holidays.list({ year });
+      await qc.cancelQueries({ queryKey: key });
+      const prev = qc.getQueryData<Holiday[]>(key);
+      const optimistic: Holiday = {
+        id: `__temp_${Date.now()}`,
+        date: vars.date,
+        name: vars.name,
+        type: vars.type ?? "NATIONAL",
+        isRecurring: vars.isRecurring ?? false,
+        creator: null,
+      };
+      qc.setQueryData<Holiday[]>(key, (old) => [...(old ?? []), optimistic]);
+      return { prev, key };
+    },
+    onError: (err, _vars, ctx) => {
+      if (ctx) qc.setQueryData(ctx.key, ctx.prev);
+      toastApiError(err, "Failed to save holiday");
+    },
+    onSuccess: () => toast.success("Holiday added"),
+    onSettled: () => void invalidateHolidays(),
+  });
+
+  // Optimistic update — patch in place across the cached year list.
+  const updateMutation = useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: typeof form }) =>
+      updateHoliday(id, payload),
+    onMutate: async ({ id, payload }) => {
+      const key = qk.holidays.list({ year });
+      await qc.cancelQueries({ queryKey: key });
+      const prev = qc.getQueryData<Holiday[]>(key);
+      qc.setQueryData<Holiday[]>(key, (old) =>
+        (old ?? []).map((h) => (h.id === id ? { ...h, ...payload } : h)),
+      );
+      return { prev, key };
+    },
+    onError: (err, _vars, ctx) => {
+      if (ctx) qc.setQueryData(ctx.key, ctx.prev);
+      toastApiError(err, "Failed to save holiday");
+    },
+    onSuccess: () => toast.success("Holiday updated"),
+    onSettled: () => void invalidateHolidays(),
+  });
+
+  // Optimistic delete — remove from cache instantly.
+  const deleteMutation = useMutation({
+    mutationFn: deleteHoliday,
+    onMutate: async (id: string) => {
+      const key = qk.holidays.list({ year });
+      await qc.cancelQueries({ queryKey: key });
+      const prev = qc.getQueryData<Holiday[]>(key);
+      qc.setQueryData<Holiday[]>(key, (old) => (old ?? []).filter((h) => h.id !== id));
+      return { prev, key };
+    },
+    onError: (err, _id, ctx) => {
+      if (ctx) qc.setQueryData(ctx.key, ctx.prev);
+      toastApiError(err, "Failed to delete");
+    },
+    onSuccess: () => toast.success("Holiday deleted"),
+    onSettled: () => void invalidateHolidays(),
+  });
 
   const holidayMap = useMemo(() => {
     const map: Record<string, Holiday[]> = {};
@@ -98,32 +165,19 @@ export default function AdminHolidaysPage() {
     setModal("edit");
   };
 
-  const handleSave = async () => {
-    try {
-      if (modal === "add") {
-        await createHoliday(form);
-        toast.success("Holiday added");
-      } else if (editId) {
-        await updateHoliday(editId, form);
-        toast.success("Holiday updated");
-      }
-      setModal(null);
-      void fetchData();
-    } catch {
-      toast.error("Failed to save holiday");
+  const handleSave = () => {
+    if (modal === "add") {
+      createMutation.mutate(form);
+    } else if (editId) {
+      updateMutation.mutate({ id: editId, payload: form });
     }
+    setModal(null);
   };
 
-  const handleDelete = async () => {
+  const handleDelete = () => {
     if (!deleteId) return;
-    try {
-      await deleteHoliday(deleteId);
-      toast.success("Holiday deleted");
-      setDeleteId(null);
-      void fetchData();
-    } catch {
-      toast.error("Failed to delete");
-    }
+    deleteMutation.mutate(deleteId);
+    setDeleteId(null);
   };
 
   // Build month grid: array of 6 weeks x 7 days (null = outside month)

@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
 import { Plus, CalendarDays, Table2, Calendar as CalendarIcon } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
@@ -15,6 +17,7 @@ import {
   Modal,
   FormField,
   Input,
+  PhoneInput,
   DatePicker,
   Select,
   Textarea,
@@ -38,10 +41,7 @@ const leaveCalColor: Record<string, string> = {
 type ViewMode = "table" | "calendar";
 
 export default function MyLeavesPage() {
-  const [requests, setRequests] = useState<LeaveRequest[]>([]);
-  const [balances, setBalances] = useState<LeaveBalance[]>([]);
-  const [types, setTypes] = useState<LeaveType[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const qc = useQueryClient();
   const [showForm, setShowForm] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>("table");
   const [calMonth, setCalMonth] = useState(() => {
@@ -55,26 +55,41 @@ export default function MyLeavesPage() {
   const [formEndDate, setFormEndDate] = useState("");
   const [formIsHalfDay, setFormIsHalfDay] = useState(false);
   const [formReason, setFormReason] = useState("");
+  const [formEmergencyContact, setFormEmergencyContact] = useState("");
 
-  const fetchData = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      const [reqRes, balRes, typRes] = await Promise.all([
-        api.get<{ requests: LeaveRequest[] }>("/leaves/my"),
-        api.get<{ balances: LeaveBalance[] }>("/leaves/balances"),
-        api.get<{ types: LeaveType[] }>("/leaves/types"),
-      ]);
-      setRequests(reqRes.data.requests);
-      setBalances(balRes.data.balances);
-      setTypes(typRes.data.types);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
+  // Three parallel queries — own requests, balances, leave types.
+  const requestsQuery = useQuery({
+    queryKey: qk.leaves.list({ scope: "my", kind: "requests" }),
+    queryFn: async () => {
+      const r = await api.get<{ requests: LeaveRequest[] }>("/leaves/my");
+      return r.data.requests;
+    },
+  });
+  const balancesQuery = useQuery({
+    queryKey: qk.leaves.list({ scope: "my", kind: "balances" }),
+    queryFn: async () => {
+      const r = await api.get<{ balances: LeaveBalance[] }>("/leaves/balances");
+      return r.data.balances;
+    },
+  });
+  const typesQuery = useQuery({
+    queryKey: qk.leaves.list({ scope: "my", kind: "types" }),
+    queryFn: async () => {
+      const r = await api.get<{ types: LeaveType[] }>("/leaves/types");
+      return r.data.types;
+    },
+    staleTime: 60 * 60 * 1000,
+  });
+  const requests = requestsQuery.data ?? [];
+  const balances = balancesQuery.data ?? [];
+  const types = typesQuery.data ?? [];
+  const isLoading =
+    requestsQuery.isLoading || balancesQuery.isLoading || typesQuery.isLoading;
 
-  useEffect(() => {
-    void fetchData();
-  }, [fetchData]);
+  const fetchData = useCallback(
+    () => qc.invalidateQueries({ queryKey: qk.leaves.lists() }),
+    [qc],
+  );
 
   const resetForm = () => {
     setFormLeaveTypeId("");
@@ -82,6 +97,7 @@ export default function MyLeavesPage() {
     setFormEndDate("");
     setFormIsHalfDay(false);
     setFormReason("");
+    setFormEmergencyContact("");
   };
 
   const handleSubmit = async () => {
@@ -91,6 +107,7 @@ export default function MyLeavesPage() {
       endDate: formEndDate,
       reason: formReason,
       isHalfDay: formIsHalfDay,
+      emergencyContact: formEmergencyContact,
     });
     if (!parsed.success) {
       toast.error(parsed.error.issues[0]?.message ?? "Validation failed");
@@ -169,6 +186,18 @@ export default function MyLeavesPage() {
       key: "reason",
       header: "Reason",
       cell: (r) => <span className="block max-w-xs truncate">{r.reason}</span>,
+    },
+    {
+      key: "emergencyContact",
+      header: "Emergency Contact",
+      cell: (r) =>
+        r.emergencyContact ? (
+          <a href={`tel:${r.emergencyContact}`} className="text-primary-600 hover:underline">
+            {r.emergencyContact}
+          </a>
+        ) : (
+          <span className="text-text-muted">—</span>
+        ),
     },
     {
       key: "status",
@@ -403,7 +432,12 @@ export default function MyLeavesPage() {
           </FormField>
           {/* §28.2.1 — Emergency contact (optional) */}
           <FormField label="Emergency Contact (optional)" htmlFor="emergencyContact">
-            <Input id="emergencyContact" type="tel" placeholder="Contact number during leave" />
+            <PhoneInput
+              id="emergencyContact"
+              value={formEmergencyContact}
+              onChange={setFormEmergencyContact}
+              placeholder="Contact number during leave"
+            />
           </FormField>
         </div>
       </Modal>

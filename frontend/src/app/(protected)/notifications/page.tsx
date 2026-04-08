@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
+import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
 import { Bell, Check, Trash2, CheckCheck, MailOpen } from "lucide-react";
 import { api } from "@/lib/api";
 import {
@@ -14,7 +16,6 @@ import {
   NotificationItem as NotificationItemUI,
   Checkbox,
 } from "@/components/ui";
-import type { NotificationData } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { NOTIFICATION_CATEGORIES } from "@/constants/notification-categories";
 import { NOTIFICATION_PAGE_SIZE } from "@/constants/pagination";
@@ -29,22 +30,18 @@ const READ_FILTER_OPTIONS = [
 ];
 
 export default function NotificationsPage() {
-  const [notifications, setNotifications] = useState<NotificationData[]>([]);
-  const [unreadCount, setUnreadCount] = useState(0);
-  const [isLoading, setIsLoading] = useState(true);
+  const qc = useQueryClient();
   const [categoryFilter, setCategoryFilter] = useLocalStorage("notif-category-filter", "");
   const [readFilter, setReadFilter] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const debouncedSearch = useDebounce(searchInput, 300);
   const [page, setPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
-  const [total, setTotal] = useState(0);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
-  const fetchData = useCallback(async () => {
-    setIsLoading(true);
-    try {
+  const notifQuery = useQuery({
+    queryKey: qk.notifications.list({ page, categoryFilter, readFilter, debouncedSearch }),
+    queryFn: async () => {
       const params: Record<string, string> = {
         page: String(page),
         limit: String(NOTIFICATION_PAGE_SIZE),
@@ -53,20 +50,19 @@ export default function NotificationsPage() {
       if (readFilter) params["readFilter"] = readFilter;
       if (debouncedSearch) params["search"] = debouncedSearch;
       const res = await api.get<PaginatedNotifications>("/notifications", { params });
-      setNotifications(res.data.data);
-      setUnreadCount(res.data.unreadCount);
-      if (res.data.pagination) {
-        setTotalPages(res.data.pagination.totalPages);
-        setTotal(res.data.pagination.total);
-      }
-    } finally {
-      setIsLoading(false);
-    }
-  }, [page, categoryFilter, readFilter, debouncedSearch]);
-
-  useEffect(() => {
-    void fetchData();
-  }, [fetchData]);
+      return res.data;
+    },
+    placeholderData: keepPreviousData,
+  });
+  const notifications = notifQuery.data?.data ?? [];
+  const unreadCount = notifQuery.data?.unreadCount ?? 0;
+  const totalPages = notifQuery.data?.pagination?.totalPages ?? 1;
+  const total = notifQuery.data?.pagination?.total ?? 0;
+  const isLoading = notifQuery.isLoading;
+  const fetchData = useCallback(
+    () => qc.invalidateQueries({ queryKey: qk.notifications.lists() }),
+    [qc],
+  );
 
   const markRead = async (id: string) => {
     await api.patch(`/notifications/${id}/read`);

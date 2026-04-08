@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
 import { Plus, GripVertical, Pencil, ChevronUp, ChevronDown, X, Check, List } from "lucide-react";
 import { toast } from "sonner";
 import { api, extractApiError } from "@/lib/api";
@@ -19,94 +21,180 @@ import {
 } from "@/components/ui";
 import type { Column } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import { useTabSearchParam } from "@/hooks";
+
+// HRFeedback and PaymentStatus are hardcoded Prisma enums on CandidateReport,
+// not rows in the dropdown_options table — they're not admin-configurable, so
+// they don't appear here.
+const CATEGORY_KEYS = [
+  "state",
+  "location",
+  "profile",
+  "higher_qualification",
+  "notice_period",
+  "diploma_type",
+] as const;
+type CategoryKey = (typeof CATEGORY_KEYS)[number];
 
 // ──────────────────────────────────────────────
 //  Master Data / Dropdown Options — Spec Section 23.19
-//  Admin-configurable dropdown values
+//
+//  - State rows carry a geographic `zone`. Admin sets it once per state.
+//  - Location rows reference their parent State row via `parentId`. The
+//    candidate form filters states by zone, then locations by selected
+//    state, so the cascading dropdown is implicit. There is NO per-row
+//    SET_A/SET_B tagging here anymore — it was the wrong abstraction.
+//  - Profile, Higher Qualification, Notice Period, Diploma Type are flat.
 // ──────────────────────────────────────────────
+
+type Zone = "NORTH" | "SOUTH" | "EAST" | "WEST" | "CENTRAL";
 
 interface DropdownItem {
   id: string;
   label: string;
   value: string;
-  zoneSet: "ALL" | "SET_A" | "SET_B";
+  category: string;
+  zone: Zone | null;
+  parentId: string | null;
   sortOrder: number;
   isActive: boolean;
 }
 
-const CATEGORIES = [
-  { key: "state", label: "State", hasZone: false },
-  { key: "location", label: "Location", hasZone: true },
-  { key: "profile", label: "Profile", hasZone: true },
-  { key: "higher_qualification", label: "Higher Qualification", hasZone: false },
-  { key: "notice_period", label: "Notice Period", hasZone: false },
-  { key: "diploma_type", label: "Diploma Type", hasZone: false },
-  { key: "hr_feedback", label: "HR Feedback", hasZone: false },
-  { key: "payment_status", label: "Payment Status", hasZone: false },
-] as const;
-
-const ZONE_TABS = [
-  { id: "ALL", label: "All" },
-  { id: "SET_A", label: "Set A" },
-  { id: "SET_B", label: "Set B" },
+const CATEGORIES: Readonly<{ key: CategoryKey; label: string }[]> = [
+  { key: "state", label: "State" },
+  { key: "location", label: "Location" },
+  { key: "profile", label: "Profile" },
+  { key: "higher_qualification", label: "Higher Qualification" },
+  { key: "notice_period", label: "Notice Period" },
+  { key: "diploma_type", label: "Diploma Type" },
 ];
-
-const ZONE_OPTIONS = [
-  { value: "ALL", label: "All" },
-  { value: "SET_A", label: "Set A" },
-  { value: "SET_B", label: "Set B" },
-];
-
-const ZONE_BADGE_VARIANT: Record<string, "default" | "success" | "warning"> = {
-  ALL: "default",
-  SET_A: "success",
-  SET_B: "warning",
-};
 
 const CATEGORY_TABS = CATEGORIES.map((c) => ({ id: c.key, label: c.label }));
 
+const ZONES: { value: Zone; label: string }[] = [
+  { value: "NORTH", label: "North" },
+  { value: "SOUTH", label: "South" },
+  { value: "EAST", label: "East" },
+  { value: "WEST", label: "West" },
+  { value: "CENTRAL", label: "Central" },
+];
+
+const ZONE_BADGE_VARIANT: Record<Zone, "default" | "primary" | "info" | "success" | "warning"> = {
+  NORTH: "info",
+  SOUTH: "success",
+  EAST: "warning",
+  WEST: "primary",
+  CENTRAL: "default",
+};
+
+interface AddFormState {
+  label: string;
+  value: string;
+  zone: Zone | "";
+  parentId: string;
+}
+
+const EMPTY_ADD: AddFormState = { label: "", value: "", zone: "", parentId: "" };
+
+interface EditFormState {
+  label: string;
+  value: string;
+  zone: Zone | "";
+  parentId: string;
+}
+
 export default function MasterDataPage() {
-  const [activeCategory, setActiveCategory] = useState("state");
-  const [items, setItems] = useState<DropdownItem[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [zoneFilter, setZoneFilter] = useState("ALL");
+  const [activeCategory, setActiveCategory] = useTabSearchParam<CategoryKey>(
+    "category",
+    "state",
+    CATEGORY_KEYS,
+  );
+  const qc = useQueryClient();
+  /** All states, kept around independently of `activeCategory` so the
+   *  Location tab can render parent-state names + populate its picker. */
+  const [allStates, setAllStates] = useState<DropdownItem[]>([]);
+
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState({ label: "", value: "" });
+  const [editForm, setEditForm] = useState<EditFormState>({
+    label: "",
+    value: "",
+    zone: "",
+    parentId: "",
+  });
+
   const [showAdd, setShowAdd] = useState(false);
-  const [addForm, setAddForm] = useState({ label: "", value: "", zoneSet: "ALL" });
+  const [addForm, setAddForm] = useState<AddFormState>(EMPTY_ADD);
 
-  const categoryDef = CATEGORIES.find((c) => c.key === activeCategory)!;
+  const isStateTab = activeCategory === "state";
+  const isLocationTab = activeCategory === "location";
 
-  const fetchItems = useCallback(async () => {
-    setIsLoading(true);
-    try {
+  // Server state — current category's items as a TanStack query, keyed by
+  // category so each tab caches independently and switching is instant.
+  const itemsQuery = useQuery({
+    queryKey: qk.masterData.list(activeCategory),
+    queryFn: async () => {
       const res = await api.get<{ data: DropdownItem[] }>(`/dropdowns/${activeCategory}`);
-      setItems(res.data.data);
-    } catch (err) {
-      toast.error(extractApiError(err).message);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [activeCategory]);
+      return res.data.data ?? [];
+    },
+  });
+  const items = useMemo(() => itemsQuery.data ?? [], [itemsQuery.data]);
+  const isLoading = itemsQuery.isLoading;
+
+  // Compatibility facade — call sites still call `void fetchItems()` after
+  // mutations; we just invalidate the current category's cache.
+  const fetchItems = useCallback(
+    () => qc.invalidateQueries({ queryKey: qk.masterData.list(activeCategory) }),
+    [qc, activeCategory],
+  );
+
+  // Independent state list — needed by the Location tab even when the
+  // current category isn't State. Cached separately under masterData.list("state").
+  const statesQuery = useQuery({
+    queryKey: qk.masterData.list("state"),
+    queryFn: async () => {
+      const res = await api.get<{ data: DropdownItem[] }>(`/dropdowns/state`);
+      return res.data.data ?? [];
+    },
+  });
+  useEffect(() => {
+    if (statesQuery.data) setAllStates(statesQuery.data);
+  }, [statesQuery.data]);
+  const fetchAllStates = useCallback(
+    () => qc.invalidateQueries({ queryKey: qk.masterData.list("state") }),
+    [qc],
+  );
+
+  // When the State tab is the active one, items === states; mirror them
+  // into allStates so a freshly added/edited state shows up in the Location
+  // tab's parent picker without a second roundtrip.
+  useEffect(() => {
+    if (isStateTab) setAllStates(items);
+  }, [isStateTab, items]);
 
   useEffect(() => {
-    void fetchItems();
-  }, [fetchItems]);
-
-  useEffect(() => {
-    setZoneFilter("ALL");
     setEditingId(null);
     setShowAdd(false);
   }, [activeCategory]);
 
-  const filteredItems =
-    categoryDef.hasZone && zoneFilter !== "ALL"
-      ? items.filter((i) => i.zoneSet === zoneFilter || i.zoneSet === "ALL")
-      : items;
+  const stateById = useMemo(() => {
+    const m = new Map<string, DropdownItem>();
+    for (const s of allStates) m.set(s.id, s);
+    return m;
+  }, [allStates]);
+
+  const stateOptions = useMemo(
+    () => [
+      { value: "", label: "— Select state —" },
+      ...allStates
+        .filter((s) => s.isActive)
+        .map((s) => ({ value: s.id, label: s.label })),
+    ],
+    [allStates],
+  );
 
   const sortedItems = useMemo(
-    () => [...filteredItems].sort((a, b) => a.sortOrder - b.sortOrder),
-    [filteredItems],
+    () => [...items].sort((a, b) => a.sortOrder - b.sortOrder),
+    [items],
   );
 
   const handleAdd = async () => {
@@ -114,17 +202,27 @@ export default function MasterDataPage() {
       toast.error("Label and value are required");
       return;
     }
+    if (isStateTab && !addForm.zone) {
+      toast.error("Zone is required for states");
+      return;
+    }
+    if (isLocationTab && !addForm.parentId) {
+      toast.error("Parent state is required for locations");
+      return;
+    }
     try {
       await api.post("/dropdowns", {
         fieldKey: activeCategory,
         label: addForm.label,
         value: addForm.value,
-        zoneSet: categoryDef.hasZone ? addForm.zoneSet : "ALL",
+        zone: isStateTab ? addForm.zone : null,
+        parentId: isLocationTab ? addForm.parentId : null,
       });
       toast.success("Option added");
       setShowAdd(false);
-      setAddForm({ label: "", value: "", zoneSet: "ALL" });
+      setAddForm(EMPTY_ADD);
       void fetchItems();
+      if (isStateTab) void fetchAllStates();
     } catch (err) {
       toast.error(extractApiError(err).message);
     }
@@ -135,11 +233,25 @@ export default function MasterDataPage() {
       toast.error("Label and value are required");
       return;
     }
+    if (isStateTab && !editForm.zone) {
+      toast.error("Zone is required for states");
+      return;
+    }
+    if (isLocationTab && !editForm.parentId) {
+      toast.error("Parent state is required for locations");
+      return;
+    }
     try {
-      await api.patch(`/dropdowns/${id}`, { label: editForm.label, value: editForm.value });
+      await api.patch(`/dropdowns/${id}`, {
+        label: editForm.label,
+        value: editForm.value,
+        ...(isStateTab && { zone: editForm.zone }),
+        ...(isLocationTab && { parentId: editForm.parentId }),
+      });
       toast.success("Option updated");
       setEditingId(null);
       void fetchItems();
+      if (isStateTab) void fetchAllStates();
     } catch (err) {
       toast.error(extractApiError(err).message);
     }
@@ -150,6 +262,7 @@ export default function MasterDataPage() {
       await api.patch(`/dropdowns/${item.id}`, { isActive: !item.isActive });
       toast.success(item.isActive ? "Option deactivated" : "Option activated");
       void fetchItems();
+      if (isStateTab) void fetchAllStates();
     } catch (err) {
       toast.error(extractApiError(err).message);
     }
@@ -180,7 +293,12 @@ export default function MasterDataPage() {
 
   const startEdit = (item: DropdownItem) => {
     setEditingId(item.id);
-    setEditForm({ label: item.label, value: item.value });
+    setEditForm({
+      label: item.label,
+      value: item.value,
+      zone: (item.zone ?? "") as Zone | "",
+      parentId: item.parentId ?? "",
+    });
   };
 
   const columns = useMemo<Column<DropdownItem>[]>(() => {
@@ -221,15 +339,48 @@ export default function MasterDataPage() {
       },
     ];
 
-    if (categoryDef.hasZone) {
+    if (isStateTab) {
       cols.push({
-        key: "zoneSet",
-        header: "Zone Set",
-        cell: (item) => (
-          <Badge variant={ZONE_BADGE_VARIANT[item.zoneSet] ?? "default"}>
-            {item.zoneSet.replace("_", " ")}
-          </Badge>
-        ),
+        key: "zone",
+        header: "Zone",
+        cell: (item) =>
+          editingId === item.id ? (
+            <Select
+              size="sm"
+              value={editForm.zone}
+              onChange={(e) => setEditForm((f) => ({ ...f, zone: e.target.value as Zone | "" }))}
+              options={[{ value: "", label: "— Select zone —" }, ...ZONES]}
+            />
+          ) : item.zone ? (
+            <Badge variant={ZONE_BADGE_VARIANT[item.zone]}>{item.zone}</Badge>
+          ) : (
+            <span className="text-text-muted text-xs italic">unset</span>
+          ),
+      });
+    }
+
+    if (isLocationTab) {
+      cols.push({
+        key: "parent",
+        header: "State",
+        cell: (item) => {
+          if (editingId === item.id) {
+            return (
+              <Select
+                size="sm"
+                value={editForm.parentId}
+                onChange={(e) => setEditForm((f) => ({ ...f, parentId: e.target.value }))}
+                options={stateOptions}
+              />
+            );
+          }
+          const parent = item.parentId ? stateById.get(item.parentId) : null;
+          return parent ? (
+            <span className="text-text-primary text-sm">{parent.label}</span>
+          ) : (
+            <span className="text-text-muted text-xs italic">unset</span>
+          );
+        },
       });
     }
 
@@ -324,7 +475,9 @@ export default function MasterDataPage() {
 
     return cols;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [categoryDef.hasZone, editingId, editForm, sortedItems]);
+  }, [isStateTab, isLocationTab, editingId, editForm, sortedItems, stateById, stateOptions]);
+
+  const activeLabel = CATEGORIES.find((c) => c.key === activeCategory)?.label ?? "";
 
   return (
     <div className="space-y-4">
@@ -336,35 +489,21 @@ export default function MasterDataPage() {
           <Tabs
             tabs={CATEGORY_TABS}
             activeTab={activeCategory}
-            onChange={setActiveCategory}
+            onChange={(id) => setActiveCategory(id as CategoryKey)}
             variant="pills"
-            className="flex-col"
+            className="flex-col items-stretch gap-2"
           />
         </nav>
 
         {/* Content */}
         <div className="flex-1 space-y-4">
-          {/* Zone tabs for zone-dependent categories */}
-          {categoryDef.hasZone && (
-            <Tabs
-              tabs={ZONE_TABS}
-              activeTab={zoneFilter}
-              onChange={setZoneFilter}
-              variant="underline"
-            />
-          )}
-
           {/* Add button */}
           <div className="flex justify-end">
             <Button
               leftIcon={Plus}
               onClick={() => {
                 setShowAdd(true);
-                setAddForm({
-                  label: "",
-                  value: "",
-                  zoneSet: zoneFilter !== "ALL" ? zoneFilter : "ALL",
-                });
+                setAddForm(EMPTY_ADD);
               }}
             >
               Add Option
@@ -375,7 +514,7 @@ export default function MasterDataPage() {
           <Modal
             open={showAdd}
             onClose={() => setShowAdd(false)}
-            title="Add New Option"
+            title={`Add New ${activeLabel}`}
             size="md"
             footer={
               <>
@@ -405,13 +544,25 @@ export default function MasterDataPage() {
                   onChange={(e) => setAddForm((f) => ({ ...f, value: e.target.value }))}
                 />
               </FormField>
-              {categoryDef.hasZone && (
-                <FormField label="Zone Set" htmlFor="add-zone">
+              {isStateTab && (
+                <FormField label="Zone" required htmlFor="add-zone">
                   <Select
                     id="add-zone"
-                    options={ZONE_OPTIONS}
-                    value={addForm.zoneSet}
-                    onChange={(e) => setAddForm((f) => ({ ...f, zoneSet: e.target.value }))}
+                    options={[{ value: "", label: "— Select zone —" }, ...ZONES]}
+                    value={addForm.zone}
+                    onChange={(e) =>
+                      setAddForm((f) => ({ ...f, zone: e.target.value as Zone | "" }))
+                    }
+                  />
+                </FormField>
+              )}
+              {isLocationTab && (
+                <FormField label="State" required htmlFor="add-parent">
+                  <Select
+                    id="add-parent"
+                    options={stateOptions}
+                    value={addForm.parentId}
+                    onChange={(e) => setAddForm((f) => ({ ...f, parentId: e.target.value }))}
                   />
                 </FormField>
               )}
@@ -425,7 +576,7 @@ export default function MasterDataPage() {
             loading={isLoading}
             emptyIcon={List}
             emptyTitle="No options yet"
-            emptyDescription={`Add options for ${categoryDef.label}`}
+            emptyDescription={`Add options for ${activeLabel}`}
             getRowId={(row) => row.id}
             compact
           />

@@ -1,7 +1,9 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
+import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft, Edit3, Save, X, Clock, ChevronRight, Printer } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -12,6 +14,7 @@ import {
   Tabs,
   FormField,
   Input,
+  PhoneInput,
   Select,
   DatePicker,
   Textarea,
@@ -22,6 +25,11 @@ import type { SelectOption } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { updateCandidate } from "@/services/candidate.service";
+import { getDropdownOptions, type DropdownOption } from "@/services/dropdown.service";
+import { useTabSearchParam } from "@/hooks";
+
+const REPORT_DETAIL_TAB_IDS = ["all", "candidate", "recruitment", "mis"] as const;
+type ReportDetailTabId = (typeof REPORT_DETAIL_TAB_IDS)[number];
 
 // ──────────────────────────────────────────────
 //  Admin — Candidate Detail / Edit Page
@@ -243,7 +251,6 @@ const TABS = [
 export default function CandidateDetailPage() {
   const params = useParams();
   const router = useRouter();
-  const searchParams = useSearchParams();
   const id = params.id as string;
 
   // ── State ──
@@ -253,7 +260,11 @@ export default function CandidateDetailPage() {
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveFailed, setSaveFailed] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
-  const [activeTab, setActiveTab] = useState(searchParams.get("tab") ?? "all");
+  const [activeTab, setActiveTab] = useTabSearchParam<ReportDetailTabId>(
+    "tab",
+    "all",
+    REPORT_DETAIL_TAB_IDS,
+  );
   const [formData, setFormData] = useState<FormData>({});
   const [originalData, setOriginalData] = useState<FormData>({});
   const [stageHistory, setStageHistory] = useState<StageHistoryEntry[]>([]);
@@ -270,6 +281,9 @@ export default function CandidateDetailPage() {
     hrManagers?: LookupItem[];
   }
   const [allCompanies, setAllCompanies] = useState<CompanyWithRelations[]>([]);
+  const [stateOptions, setStateOptions] = useState<DropdownOption[]>([]);
+  const [locationOptions, setLocationOptions] = useState<DropdownOption[]>([]);
+  const [profileOptions, setProfileOptions] = useState<DropdownOption[]>([]);
   const companies = allCompanies; // alias for options
   const selectedCompanyId = formData.companyId as string | undefined;
 
@@ -304,25 +318,23 @@ export default function CandidateDetailPage() {
   const hasChangesRef = useRef(hasChanges);
   hasChangesRef.current = hasChanges;
 
-  // §6.1.1 — Tab URL state persistence
-  const switchTab = useCallback((tab: string) => {
-    if (hasChangesRef.current) {
-      setPendingTab(tab);
-      return;
-    }
-    setActiveTab(tab);
-    const url = new URL(window.location.href);
-    url.searchParams.set("tab", tab);
-    window.history.replaceState(null, "", url.toString());
-  }, []);
+  // §6.1.1 — Tab URL state persistence is handled by useTabSearchParam.
+  // This wrapper just adds the dirty-state guard on top.
+  const switchTab = useCallback(
+    (tab: string) => {
+      if (hasChangesRef.current) {
+        setPendingTab(tab);
+        return;
+      }
+      setActiveTab(tab as ReportDetailTabId);
+    },
+    [setActiveTab],
+  );
 
   const confirmTabSwitch = () => {
     if (pendingTab) {
       setFormData({ ...originalData });
-      setActiveTab(pendingTab);
-      const url = new URL(window.location.href);
-      url.searchParams.set("tab", pendingTab);
-      window.history.replaceState(null, "", url.toString());
+      setActiveTab(pendingTab as ReportDetailTabId);
       setPendingTab(null);
     }
   };
@@ -353,51 +365,94 @@ export default function CandidateDetailPage() {
   }, []);
 
   // ── Data fetching ──
-
-  const fetchCandidate = useCallback(async () => {
-    setIsLoading(true);
-    try {
+  const candidateQuery = useQuery({
+    queryKey: qk.employees.detail(id),
+    queryFn: async () => {
       const res = await api.get<{ report: CandidateDetail }>(`/candidates/${id}`);
-      const c = res.data.report;
+      return res.data.report;
+    },
+  });
+  useEffect(() => {
+    if (candidateQuery.data) {
+      const c = candidateQuery.data;
       setCandidate(c);
       const flat = flattenToForm(c);
       setFormData(flat);
       setOriginalData(flat);
-    } catch (err: unknown) {
+      setIsLoading(false);
+    }
+    if (candidateQuery.isError) {
+      const err = candidateQuery.error;
       const message = err instanceof Error ? err.message : "Failed to load candidate";
       toast.error(message);
       router.push("/admin/reports");
-    } finally {
-      setIsLoading(false);
     }
-  }, [id, router]);
+  }, [candidateQuery.data, candidateQuery.isError, candidateQuery.error, router]);
+  const fetchCandidate = useCallback(async () => {
+    await candidateQuery.refetch();
+  }, [candidateQuery]);
 
-  const fetchStageHistory = useCallback(async () => {
-    try {
+  const stageHistoryQuery = useQuery({
+    queryKey: [...qk.employees.detail(id), "stage-history"] as const,
+    queryFn: async () => {
       const res = await api.get<{ history: StageHistoryEntry[] }>(
         `/candidates/${id}/stage-history`,
       );
-      setStageHistory(res.data.history);
-    } catch {
-      // Stage history is non-critical; silently fail
-    }
-  }, [id]);
+      return res.data.history;
+    },
+  });
+  useEffect(() => {
+    if (stageHistoryQuery.data) setStageHistory(stageHistoryQuery.data);
+  }, [stageHistoryQuery.data]);
+  const fetchStageHistory = useCallback(async () => {
+    await stageHistoryQuery.refetch();
+  }, [stageHistoryQuery]);
 
   // §9 — Fetch companies with nested SPs and HRs in one call
-  const fetchLookups = useCallback(async () => {
-    try {
-      const res = await api.get<{ companies: CompanyWithRelations[] }>("/companies");
-      setAllCompanies(res.data.companies ?? []);
-    } catch {
-      // Non-critical; selects will be empty
-    }
-  }, []);
-
+  const lookupsQuery = useQuery({
+    queryKey: ["report-detail-lookups"] as const,
+    queryFn: async () => {
+      const [companiesRes, states, locations, profiles] = await Promise.all([
+        api
+          .get<{ companies: CompanyWithRelations[] }>("/companies")
+          .then((r) => r.data.companies ?? [])
+          .catch(() => [] as CompanyWithRelations[]),
+        getDropdownOptions("STATE").catch(() => [] as DropdownOption[]),
+        getDropdownOptions("LOCATION").catch(() => [] as DropdownOption[]),
+        getDropdownOptions("PROFILE").catch(() => [] as DropdownOption[]),
+      ]);
+      return { companies: companiesRes, states, locations, profiles };
+    },
+    staleTime: 5 * 60 * 1000,
+  });
   useEffect(() => {
-    void fetchCandidate();
-    void fetchStageHistory();
-    void fetchLookups();
-  }, [fetchCandidate, fetchStageHistory, fetchLookups]);
+    if (lookupsQuery.data) {
+      setAllCompanies(lookupsQuery.data.companies);
+      setStateOptions(lookupsQuery.data.states);
+      setLocationOptions(lookupsQuery.data.locations);
+      setProfileOptions(lookupsQuery.data.profiles);
+    }
+  }, [lookupsQuery.data]);
+  const fetchLookups = useCallback(async () => {
+    await lookupsQuery.refetch();
+  }, [lookupsQuery]);
+
+  // §23.19 — State→Location cascade. States are filtered by the candidate's
+  // (immutable) zone, locations by the currently-selected state's id.
+  const filteredStates = useMemo(
+    () => (candidate?.zone ? stateOptions.filter((s) => s.zone === candidate.zone) : stateOptions),
+    [stateOptions, candidate?.zone],
+  );
+  const selectedStateValue = formData.state as string | undefined;
+  const selectedStateId = useMemo(
+    () => stateOptions.find((s) => s.value === selectedStateValue)?.id ?? null,
+    [stateOptions, selectedStateValue],
+  );
+  const filteredLocations = useMemo(
+    () => (selectedStateId ? locationOptions.filter((l) => l.parentId === selectedStateId) : []),
+    [locationOptions, selectedStateId],
+  );
+
 
   // ── Form helpers ──
 
@@ -408,6 +463,10 @@ export default function CandidateDetailPage() {
       if (field === "companyId") {
         next.serviceProviderId = "";
         next.hrManagerId = "";
+      }
+      // §23.19 — When state changes, clear location (it belongs to old state)
+      if (field === "state") {
+        next.location = "";
       }
       return next;
     });
@@ -543,16 +602,32 @@ export default function CandidateDetailPage() {
     </FormField>
   );
 
+  const renderPhone = (
+    field: string,
+    label: string,
+    opts?: { required?: boolean },
+  ) => (
+    <FormField label={label} htmlFor={field} required={opts?.required}>
+      <PhoneInput
+        id={field}
+        value={String(formData[field] ?? "")}
+        onChange={(v) => updateField(field, v)}
+        disabled={!isEditing}
+      />
+    </FormField>
+  );
+
   const renderSelect = (
     field: string,
     label: string,
     options: SelectOption[],
-    opts?: { required?: boolean },
+    opts?: { required?: boolean; searchable?: boolean },
   ) => (
     <FormField label={label} htmlFor={field} required={opts?.required}>
       <Select
         id={field}
         options={options}
+        searchable={opts?.searchable}
         value={String(formData[field] ?? "")}
         onChange={(e) => {
           const val = e.target.value;
@@ -624,10 +699,29 @@ export default function CandidateDetailPage() {
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           {renderDatePicker("dateSourced", "Date Sourced / Profile Received")}
           {renderInput("candidateName", "Candidate Name", { required: true })}
-          {renderInput("contactNo", "Contact No", { required: true })}
+          {renderPhone("contactNo", "Contact No", { required: true })}
           {renderInput("emailId", "Email ID", { type: "email" })}
-          {renderInput("state", "State")}
-          {renderInput("location", "Location")}
+          {renderSelect(
+            "state",
+            "State",
+            [
+              { value: "", label: "Select state" },
+              ...filteredStates.map((s) => ({ value: s.value, label: s.label })),
+            ],
+            { searchable: true },
+          )}
+          {renderSelect(
+            "location",
+            "Location",
+            [
+              {
+                value: "",
+                label: selectedStateId ? "Select location" : "Select a state first",
+              },
+              ...filteredLocations.map((l) => ({ value: l.value, label: l.label })),
+            ],
+            { searchable: true },
+          )}
           {renderDatePicker("dateOfBirth", "Date of Birth")}
           {/* §5.2 #23 — Age auto-calculated from DOB (read-only) */}
           <FormField label="Age" htmlFor="age-display">
@@ -675,7 +769,15 @@ export default function CandidateDetailPage() {
           Employment Details
         </h3>
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          {renderInput("profile", "Profile")}
+          {renderSelect(
+            "profile",
+            "Profile",
+            [
+              { value: "", label: "Select profile" },
+              ...profileOptions.map((p) => ({ value: p.value, label: p.label })),
+            ],
+            { searchable: true },
+          )}
           {renderInput("yearsOfExperience", "Years of Experience", { type: "number" })}
           {renderInput("currentCtc", "Current CTC")}
           {renderInput("expectedCtc", "Expected CTC")}

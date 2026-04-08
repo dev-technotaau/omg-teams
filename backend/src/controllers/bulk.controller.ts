@@ -73,8 +73,19 @@ export async function handleBulkAssignCompany(req: Request, res: Response): Prom
 }
 
 /** POST /api/v1/bulk/restore — Bulk restore from trash */
+const bulkRestoreSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        id: z.string(),
+        entityType: z.enum(["candidate", "company", "serviceProvider", "hrManager", "user"]),
+      }),
+    )
+    .min(1),
+});
+
 export async function handleBulkRestore(req: Request, res: Response): Promise<void> {
-  const { ids } = idsSchema.parse(req.body);
-  const result = await bulkSvc.bulkRestore(ids);
+  const { items } = bulkRestoreSchema.parse(req.body);
+  const result = await bulkSvc.bulkRestore(items);
   res.status(200).json({ restored: result.count });
 }

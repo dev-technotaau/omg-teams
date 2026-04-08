@@ -70,6 +70,10 @@ api.interceptors.response.use(
 export interface ApiError {
   message: string;
   status: number;
+  /** Stable backend ErrorCode string (e.g. SESSION_EXISTS) — present when the
+   *  backend AppError set one. Used by callers that need to distinguish error
+   *  classes programmatically without regex-matching the message. */
+  code?: string;
   details?: Array<{ path: string; message: string }>;
 }
 
@@ -79,6 +83,7 @@ export function extractApiError(error: unknown): ApiError {
     return {
       message: (data?.error as string) ?? (data?.message as string) ?? error.message,
       status: error.response?.status ?? 500,
+      code: typeof data?.code === "string" ? data.code : undefined,
       details: data?.details as ApiError["details"],
     };
   }

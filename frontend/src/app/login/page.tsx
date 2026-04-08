@@ -7,11 +7,12 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import axios from "axios";
-import { Sun, Moon, Eye, EyeOff } from "lucide-react";
+import { Sun, Moon, Eye, EyeOff, AlertTriangle } from "lucide-react";
 import { useTheme } from "next-themes";
 import { extractApiError } from "@/lib/api";
 import { getDeviceId } from "@/lib/device-id";
 import { Turnstile } from "@/components/common/turnstile";
+import { Modal, Button } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { ALL_ROLE_OPTIONS } from "@/constants/roles";
 import { ROUTES } from "@/constants/routes";
@@ -27,19 +28,25 @@ import { startAuthentication } from "@simplewebauthn/browser";
 //  Spec Section 4
 // ──────────────────────────────────────────────
 
-type RoleTab = "RECRUITER" | "REPORTING_MANAGER" | "ADMIN";
+// "TEAM" is the client-side bucket that the backend resolves to either
+// RECRUITER or REPORTING_MANAGER from the user record. ADMIN stays separate.
+type RoleTab = "TEAM" | "ADMIN";
+type ResolvedRole = "RECRUITER" | "REPORTING_MANAGER" | "ADMIN";
 
-const TABS: { key: RoleTab; label: string }[] = ALL_ROLE_OPTIONS.map((r) => ({
-  key: r.value as RoleTab,
-  label: r.label,
-}));
+const TABS: { key: RoleTab; label: string }[] = [
+  { key: "TEAM", label: "Team" },
+  { key: "ADMIN", label: ALL_ROLE_OPTIONS.find((r) => r.value === "ADMIN")?.label ?? "Admin" },
+];
 
-const ROLE_DASHBOARDS: Record<RoleTab, string> = {
+const ROLE_DASHBOARDS: Record<ResolvedRole, string> = {
   ADMIN: ROUTES.ADMIN_DASHBOARD,
   RECRUITER: ROUTES.DASHBOARD,
   REPORTING_MANAGER: ROUTES.DASHBOARD,
 };
 
+// Generic shape — per-field format validation is tab-aware and lives on
+// the `register("identifier", { validate })` callback below, because the
+// expected format flips between Email (ADMIN) and Employee ID (others).
 const loginSchema = z.object({
   identifier: z.string().min(1, "This field is required"),
   password: z.string().min(1, "Password is required"),
@@ -47,12 +54,24 @@ const loginSchema = z.object({
 
 type LoginForm = z.infer<typeof loginSchema>;
 
+// RFC-lite email check — good enough for client UX, the backend is
+// authoritative for the real validation.
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// Employee IDs come in two shapes:
+//   • Legacy: OMG-NNNN (4+ digits, kept for users created before the
+//     enumeration-mitigation switch — these IDs are still valid forever).
+//   • Current: OMG-XXXXXX (6 RFC 4648 base32 chars, A-Z + 2-7) — generated
+//     by user.service.ts#generateEmployeeId so attackers can't enumerate
+//     the integer space.
+// Accept either format on the login form.
+const EMPLOYEE_ID_REGEX = /^OMG-(?:\d{4,}|[A-Z2-7]{6})$/i;
+
 export default function LoginPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const redirectTo = searchParams.get("redirect");
 
-  const [activeTab, setActiveTab] = useState<RoleTab>("RECRUITER");
+  const [activeTab, setActiveTab] = useState<RoleTab>("TEAM");
   const [turnstileToken, setTurnstileToken] = useState("");
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -63,49 +82,85 @@ export default function LoginPage() {
   // Passkey login
   const [passkeySupported, setPasskeySupported] = useState(false);
   const [passkeyLoading, setPasskeyLoading] = useState(false);
+  // Admin session-conflict modal — when an admin tries to log in while
+  // already having an active session on another device, the backend returns
+  // 409 SESSION_EXISTS. We stash the original attempt details here so the
+  // "Continue" button can re-submit the same flow with confirmReplaceSession.
+  type PendingConflict =
+    | { kind: "password"; data: LoginForm }
+    | { kind: "passkey" }
+    | null;
+  const [pendingConflict, setPendingConflict] = useState<PendingConflict>(null);
 
   const {
     register,
     handleSubmit,
     formState: { errors: formErrors },
     reset,
+    trigger,
   } = useForm<LoginForm>({
     resolver: zodResolver(loginSchema),
+    // Validate after the user has interacted with a field (blur), then keep
+    // validating on every change so errors update live as they type.
+    mode: "onTouched",
+    reValidateMode: "onChange",
   });
+
+  // Tab-aware identifier validator. Returns true on valid, error string otherwise.
+  const validateIdentifier = useCallback(
+    (value: string) => {
+      if (!value) return "This field is required";
+      if (activeTab === "ADMIN") {
+        return EMAIL_REGEX.test(value) || "Enter a valid email address";
+      }
+      return EMPLOYEE_ID_REGEX.test(value) || "Employee ID must look like OMG-XXXXXX";
+    },
+    [activeTab],
+  );
 
   // Check passkey support on mount
   useEffect(() => {
     setPasskeySupported(isWebAuthnSupported());
   }, []);
 
-  const onPasskeyLogin = useCallback(async () => {
-    setPasskeyLoading(true);
-    setError("");
-    try {
-      const deviceId = getDeviceId();
-      const { options, challengeId } = await getLoginOptions();
+  const onPasskeyLogin = useCallback(
+    async (confirmReplaceSession = false) => {
+      setPasskeyLoading(true);
+      setError("");
+      try {
+        const deviceId = getDeviceId();
+        const { options, challengeId } = await getLoginOptions();
 
-      const attResp = await startAuthentication({ optionsJSON: options });
-      const result = await loginWithPasskey(
-        attResp as unknown as Record<string, unknown>,
-        challengeId,
-        deviceId,
-      );
-      const role = result.user.role as RoleTab;
-      const destination = redirectTo ?? ROLE_DASHBOARDS[role] ?? "/dashboard";
-      router.push(destination);
-    } catch (err: unknown) {
-      // User cancelled the browser prompt
-      if (err instanceof Error && err.name === "NotAllowedError") {
-        setError("Passkey authentication was cancelled");
-      } else {
+        const attResp = await startAuthentication({ optionsJSON: options });
+        const result = await loginWithPasskey(
+          attResp as unknown as Record<string, unknown>,
+          challengeId,
+          deviceId,
+          confirmReplaceSession,
+        );
+        const role = result.user.role as ResolvedRole;
+        const destination = redirectTo ?? ROLE_DASHBOARDS[role] ?? "/dashboard";
+        router.push(destination);
+      } catch (err: unknown) {
+        // User cancelled the browser prompt
+        if (err instanceof Error && err.name === "NotAllowedError") {
+          setError("Passkey authentication was cancelled");
+          return;
+        }
         const apiErr = extractApiError(err);
+        // Admin already has an active session on another device — prompt
+        // for explicit confirmation before nuking it.
+        if (apiErr.code === "SESSION_EXISTS") {
+          setPendingConflict({ kind: "passkey" });
+          return;
+        }
         setError(apiErr.message);
+      } finally {
+        setPasskeyLoading(false);
       }
-    } finally {
-      setPasskeyLoading(false);
-    }
-  }, [redirectTo, router]);
+    },
+    [redirectTo, router],
+  );
 
   const onTabChange = useCallback(
     (tab: RoleTab) => {
@@ -116,19 +171,21 @@ export default function LoginPage() {
     [reset],
   );
 
-  const onSubmit = useCallback(
-    async (data: LoginForm) => {
-      if (!turnstileToken) {
-        setError("Please complete the captcha verification");
-        return;
-      }
+  // When the user switches tabs without resetting (edge case), still
+  // re-validate so the format error updates immediately.
+  useEffect(() => {
+    void trigger("identifier");
+  }, [activeTab, trigger]);
 
+  // Submit the password login. Extracted into its own function (rather than
+  // living entirely inside onSubmit) so the session-conflict modal's
+  // "Continue" button can re-fire the same request with confirmReplaceSession.
+  const submitPasswordLogin = useCallback(
+    async (data: LoginForm, confirmReplaceSession: boolean) => {
       setIsLoading(true);
       setError("");
-
       try {
         const deviceId = getDeviceId();
-
         const response = await axios.post<{ user: { role: string } }>("/api/auth/login", {
           identifier: data.identifier,
           password: data.password,
@@ -136,13 +193,19 @@ export default function LoginPage() {
           deviceId,
           turnstileToken,
           ...(backupCode && { backupCode }),
+          ...(confirmReplaceSession && { confirmReplaceSession: true }),
         });
-
-        const role = response.data.user.role as RoleTab;
+        const role = response.data.user.role as ResolvedRole;
         const destination = redirectTo ?? ROLE_DASHBOARDS[role] ?? "/dashboard";
         router.push(destination);
       } catch (err) {
         const apiErr = extractApiError(err);
+        // Admin already logged in elsewhere — show confirmation modal so they
+        // can decide whether to log out the other device.
+        if (apiErr.code === "SESSION_EXISTS") {
+          setPendingConflict({ kind: "password", data });
+          return;
+        }
         setError(apiErr.message);
         // §23.16 — Show backup code field on device mismatch error
         if (
@@ -158,10 +221,41 @@ export default function LoginPage() {
     [activeTab, turnstileToken, redirectTo, router, backupCode],
   );
 
-  const identifierLabel = activeTab === "ADMIN" ? "Email" : "Employee ID";
-  const identifierPlaceholder = activeTab === "ADMIN" ? "admin@example.com" : "OMG-0001";
+  const onSubmit = useCallback(
+    async (data: LoginForm) => {
+      if (!turnstileToken) {
+        setError("Please complete the captcha verification");
+        return;
+      }
+      await submitPasswordLogin(data, false);
+    },
+    [turnstileToken, submitPasswordLogin],
+  );
 
-  const { theme, setTheme } = useTheme();
+  // "Continue" button on the session-conflict modal — replays whichever
+  // login flow originally tripped the conflict, this time with
+  // confirmReplaceSession set so the backend atomically replaces the old
+  // session via createSession's single-session enforcement.
+  const onConfirmReplaceSession = useCallback(async () => {
+    if (!pendingConflict) return;
+    const conflict = pendingConflict;
+    setPendingConflict(null);
+    if (conflict.kind === "password") {
+      await submitPasswordLogin(conflict.data, true);
+    } else {
+      await onPasskeyLogin(true);
+    }
+  }, [pendingConflict, submitPasswordLogin, onPasskeyLogin]);
+
+  const identifierLabel = activeTab === "ADMIN" ? "Email" : "Employee ID";
+  const identifierPlaceholder = activeTab === "ADMIN" ? "admin@example.com" : "OMG-XXXXXX";
+
+  const { theme, resolvedTheme, setTheme } = useTheme();
+  const [themeMounted, setThemeMounted] = useState(false);
+  useEffect(() => {
+    setThemeMounted(true);
+  }, []);
+  const isDark = themeMounted && resolvedTheme === "dark";
 
   return (
     <div className="bg-background flex min-h-screen items-center justify-center px-4">
@@ -179,7 +273,7 @@ export default function LoginPage() {
         {/* Logo / Branding */}
         <div className="mb-8 flex justify-center">
           <Image
-            src={theme === "dark" ? "/icons/logo.png" : "/icons/logo-light-theme.png"}
+            src={isDark ? "/icons/logo.png" : "/icons/logo-light-theme.png"}
             alt="Opportunity Makers Group"
             width={280}
             height={70}
@@ -189,7 +283,7 @@ export default function LoginPage() {
 
         {/* Card */}
         <div className="border-border bg-card rounded-lg border p-6 shadow-xs">
-          {/* Tabs */}
+          {/* Tabs — Team (Recruiter + Reporting Manager) vs Admin */}
           <div className="border-border mb-6 flex overflow-hidden rounded-lg border">
             {TABS.map((tab) => (
               <button
@@ -236,7 +330,8 @@ export default function LoginPage() {
                   "focus:border-ring focus:ring-ring/20 focus:ring-2",
                   formErrors.identifier ? "border-red-500" : "border-border",
                 )}
-                {...register("identifier")}
+                {...register("identifier", { validate: validateIdentifier })}
+                inputMode={activeTab === "ADMIN" ? "email" : "text"}
               />
               {formErrors.identifier && (
                 <p className="mt-1 text-xs text-red-500">{formErrors.identifier.message}</p>
@@ -406,6 +501,41 @@ export default function LoginPage() {
           Contact your administrator if you need access
         </p>
       </div>
+
+      {/* Admin session-conflict confirmation modal — fires when an admin
+          tries to log in while already having an active session on another
+          device. Continuing replays the original login flow with
+          confirmReplaceSession so the backend atomically takes over. */}
+      <Modal
+        open={pendingConflict !== null}
+        onClose={() => setPendingConflict(null)}
+        title="You're already logged in"
+        size="sm"
+      >
+        <div className="space-y-4">
+          <div className="flex items-start gap-3">
+            <div className="bg-warning-100 text-warning-600 flex h-10 w-10 shrink-0 items-center justify-center rounded-full">
+              <AlertTriangle size={20} />
+            </div>
+            <p className="text-text-secondary text-sm">
+              You are currently logged in on another device. Continuing will log you out from
+              all other devices and start a new session here.
+            </p>
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => setPendingConflict(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => void onConfirmReplaceSession()}
+              loading={isLoading || passkeyLoading}
+            >
+              Continue
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

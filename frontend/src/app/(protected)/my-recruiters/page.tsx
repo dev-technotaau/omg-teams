@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
 import { Users, Eye } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
@@ -46,30 +48,20 @@ interface RecruiterInfo {
 
 export default function MyRecruitersPage() {
   const router = useRouter();
-  const [recruiters, setRecruiters] = useState<RecruiterInfo[]>([]);
   const [filtered, setFiltered] = useState<RecruiterInfo[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search, 300);
   const [page, setPage] = useState(1);
   const pageSize = 20;
 
-  // §23.15 — Live presence for assigned recruiters
-  const recruiterIds = useMemo(() => recruiters.map((r) => r.id), [recruiters]);
-  const presenceMap = usePresence(recruiterIds);
-
-  const fetchRecruiters = useCallback(async () => {
-    try {
+  const recruitersQuery = useQuery({
+    queryKey: qk.myRecruiters.list(),
+    queryFn: async () => {
       const meRes = await api.get<{
-        user: {
-          managedRecruiters?: Array<{ recruiter: RecruiterInfo }>;
-        };
+        user: { managedRecruiters?: Array<{ recruiter: RecruiterInfo }> };
       }>("/auth/me");
-
       const managed = meRes.data.user.managedRecruiters ?? [];
       const recruiterList = managed.map((m) => m.recruiter);
-
-      // Fetch candidate stats + team attendance
       if (recruiterList.length > 0) {
         try {
           const [statsRes, snapRes] = await Promise.allSettled([
@@ -95,33 +87,29 @@ export default function MyRecruitersPage() {
           }
           if (snapRes.status === "fulfilled") {
             const teamLogins = snapRes.value.data.teamLogins ?? [];
-            // Match logins to recruiters by name
             for (const r of recruiterList) {
               const fullName = `${r.firstName} ${r.lastName}`;
               const login = teamLogins.find((l) => l.name === fullName);
-              if (login) {
-                r.attendanceToday = login.punchIn;
-              }
+              if (login) r.attendanceToday = login.punchIn;
             }
           }
         } catch {
           /* stats/snapshot may not exist */
         }
       }
-
-      setRecruiters(recruiterList);
-      setFiltered(recruiterList);
-    } catch {
-      setRecruiters([]);
-      setFiltered([]);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
+      return recruiterList;
+    },
+  });
+  const recruiters = useMemo(() => recruitersQuery.data ?? [], [recruitersQuery.data]);
+  const isLoading = recruitersQuery.isLoading;
   useEffect(() => {
-    void fetchRecruiters();
-  }, [fetchRecruiters]);
+    setFiltered(recruiters);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recruitersQuery.data]);
+
+  // §23.15 — Live presence for assigned recruiters
+  const recruiterIds = useMemo(() => recruiters.map((r) => r.id), [recruiters]);
+  const presenceMap = usePresence(recruiterIds);
 
   // Client-side search filter
   useEffect(() => {

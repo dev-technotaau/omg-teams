@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
 import Link from "next/link";
 import {
   Trash2,
@@ -29,7 +31,6 @@ import { toast } from "sonner";
 import {
   listCandidates,
   type CandidateReport,
-  type PaginatedResponse,
 } from "@/services/candidate.service";
 import { api } from "@/lib/api";
 import {
@@ -90,8 +91,7 @@ function stageLabel(value: string): string {
 }
 
 export default function AdminReportsPage() {
-  const [data, setData] = useState<PaginatedResponse<CandidateReport> | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const qc = useQueryClient();
   const [dateTab, setDateTab] = useState<DateTab>("today");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
@@ -125,19 +125,6 @@ export default function AdminReportsPage() {
     useFilterPresets("admin-reports");
   const [density, setDensity] = useState<RowDensity>("default");
   const [pinnedIds, setPinnedIds] = useState<Set<string>>(new Set());
-
-  // ── Summary stats (computed from current page data) ──
-  const stats = useMemo(() => {
-    const items = data?.data ?? [];
-    const total = data?.pagination.total ?? 0;
-    const complete = items.filter((r) => r.status === "COMPLETE").length;
-    const pending = items.filter((r) => r.status !== "COMPLETE").length;
-    const stageCounts: Record<string, number> = {};
-    for (const item of items) {
-      stageCounts[item.candidateStage] = (stageCounts[item.candidateStage] ?? 0) + 1;
-    }
-    return { total, complete, pending, stageCounts };
-  }, [data]);
 
   const activeFilterCount = [
     stageFilter,
@@ -183,9 +170,24 @@ export default function AdminReportsPage() {
     }
   }, [dateTab, customFrom, customTo]);
 
-  const fetchData = useCallback(async () => {
-    setIsLoading(true);
-    try {
+  const reportsQuery = useQuery({
+    queryKey: qk.reports.list({
+      scope: "admin",
+      page,
+      pageSize,
+      search,
+      sortKey,
+      sortDir,
+      stageFilter,
+      statusFilter,
+      zoneFilter,
+      recruiterFilter,
+      companyFilter,
+      dateTab,
+      customFrom,
+      customTo,
+    }),
+    queryFn: () => {
       const params: Record<string, string> = { page: String(page), limit: String(pageSize) };
       if (search) params["search"] = search;
       if (sortKey) {
@@ -200,32 +202,45 @@ export default function AdminReportsPage() {
       const range = getDateRange();
       if (range.dateFrom) params["dateFrom"] = range.dateFrom;
       if (range.dateTo) params["dateTo"] = range.dateTo;
-      setData(await listCandidates(params));
-    } finally {
-      setIsLoading(false);
+      return listCandidates(params);
+    },
+    placeholderData: keepPreviousData,
+  });
+  const data = reportsQuery.data ?? null;
+  const isLoading = reportsQuery.isLoading;
+  const fetchData = useCallback(
+    () => qc.invalidateQueries({ queryKey: qk.reports.lists() }),
+    [qc],
+  );
+
+  // ── Summary stats (computed from current page data) ──
+  const stats = useMemo(() => {
+    const items = data?.data ?? [];
+    const total = data?.pagination.total ?? 0;
+    const complete = items.filter((r) => r.status === "COMPLETE").length;
+    const pending = items.filter((r) => r.status !== "COMPLETE").length;
+    const stageCounts: Record<string, number> = {};
+    for (const item of items) {
+      stageCounts[item.candidateStage] = (stageCounts[item.candidateStage] ?? 0) + 1;
     }
-  }, [
-    page,
-    pageSize,
-    search,
-    sortKey,
-    sortDir,
-    stageFilter,
-    statusFilter,
-    zoneFilter,
-    recruiterFilter,
-    companyFilter,
-    getDateRange,
-  ]);
+    return { total, complete, pending, stageCounts };
+  }, [data]);
 
   useEffect(() => {
     void fetchData();
   }, [fetchData]);
 
   // Fetch companies for bulk assign
+  const companiesQuery = useQuery({
+    queryKey: qk.companies.list(),
+    queryFn: () => listCompanies(),
+    staleTime: 5 * 60 * 1000,
+  });
   useEffect(() => {
-    void listCompanies().then(setCompanies);
-  }, []);
+    // reason: mirroring react-query result into existing local state
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (companiesQuery.data) setCompanies(companiesQuery.data);
+  }, [companiesQuery.data]);
 
   const handleSort = useCallback(
     (key: string | null, dir: "asc" | "desc" | null) => {
@@ -795,7 +810,18 @@ export default function AdminReportsPage() {
           </div>
         )}
 
-        <div className="flex-1" />
+        {/* Search — shares the row with date tabs and filter toggle */}
+        <SearchInput
+          value={search}
+          onChange={(v) => {
+            setSearch(v);
+            setPage(1);
+          }}
+          placeholder="Search by name, phone, email..."
+          historyKey="candidates"
+          suggestions
+          className="max-w-md min-w-48 flex-1"
+        />
 
         {/* Filter toggle */}
         <Button
@@ -813,19 +839,6 @@ export default function AdminReportsPage() {
           </Button>
         )}
       </div>
-
-      {/* Search */}
-      <SearchInput
-        value={search}
-        onChange={(v) => {
-          setSearch(v);
-          setPage(1);
-        }}
-        placeholder="Search by name, phone, email..."
-        historyKey="candidates"
-        suggestions
-        className="max-w-md"
-      />
 
       {/* ── Filter Presets ── */}
       <FilterPresetsBar

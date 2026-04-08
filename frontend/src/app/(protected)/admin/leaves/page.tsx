@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
 import {
   Check,
   X,
@@ -31,9 +33,8 @@ import type { PaginatedResponse } from "@/types/api";
 type AdminTab = "requests" | "balances";
 
 export default function AdminLeavesPage() {
+  const qc = useQueryClient();
   const [activeTab, setActiveTab] = useState<AdminTab>("requests");
-  const [data, setData] = useState<PaginatedResponse<LeaveRequest> | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState("PENDING");
   const [employeeSearch, setEmployeeSearch] = useState("");
   const [leaveTypeFilter, setLeaveTypeFilter] = useState("");
@@ -47,8 +48,6 @@ export default function AdminLeavesPage() {
   const [isBulkProcessing, setIsBulkProcessing] = useState(false);
 
   // Balance tab state
-  const [balances, setBalances] = useState<LeaveBalance[]>([]);
-  const [balancesLoading, setBalancesLoading] = useState(false);
   const [balanceYear, setBalanceYear] = useState(new Date().getFullYear());
   // §28.3.3 — Balance adjustment modal
   const [adjustTarget, setAdjustTarget] = useState<{
@@ -68,43 +67,47 @@ export default function AdminLeavesPage() {
       .catch(() => {});
   }, []);
 
-  const fetchData = useCallback(async () => {
-    setIsLoading(true);
-    try {
+  // Server state — leave requests, scoped to current filter combo.
+  const requestsQuery = useQuery({
+    queryKey: qk.leaves.list({ scope: "requests", page, statusFilter }),
+    queryFn: async () => {
       const params: Record<string, string> = {
         page: String(page),
         limit: String(DEFAULT_LARGE_PAGE_SIZE),
       };
       if (statusFilter) params["status"] = statusFilter;
       const res = await api.get<PaginatedResponse<LeaveRequest>>("/leaves", { params });
-      setData(res.data);
-      setSelectedIds(new Set());
-    } finally {
-      setIsLoading(false);
-    }
-  }, [page, statusFilter]);
+      return res.data;
+    },
+    enabled: activeTab === "requests",
+    placeholderData: keepPreviousData,
+  });
+  const data = requestsQuery.data ?? null;
+  const isLoading = requestsQuery.isLoading;
 
-  useEffect(() => {
-    if (activeTab === "requests") void fetchData();
-  }, [fetchData, activeTab]);
+  const fetchData = useCallback(
+    () => qc.invalidateQueries({ queryKey: qk.leaves.lists() }),
+    [qc],
+  );
 
-  const fetchBalances = useCallback(async () => {
-    setBalancesLoading(true);
-    try {
+  // Server state — leave balances, scoped to year.
+  const balancesQuery = useQuery({
+    queryKey: qk.leaves.list({ scope: "balances", year: balanceYear }),
+    queryFn: async () => {
       const res = await api.get<{ balances: LeaveBalance[] }>("/leaves/balances/all", {
         params: { year: String(balanceYear) },
       });
-      setBalances(res.data.balances);
-    } catch {
-      toast.error("Failed to load balances");
-    } finally {
-      setBalancesLoading(false);
-    }
-  }, [balanceYear]);
+      return res.data.balances;
+    },
+    enabled: activeTab === "balances",
+  });
+  const balances = balancesQuery.data ?? [];
+  const balancesLoading = balancesQuery.isLoading;
+  const fetchBalances = useCallback(
+    () => qc.invalidateQueries({ queryKey: qk.leaves.lists() }),
+    [qc],
+  );
 
-  useEffect(() => {
-    if (activeTab === "balances") void fetchBalances();
-  }, [fetchBalances, activeTab]);
 
   const handleApprove = async (id: string) => {
     try {
@@ -235,6 +238,7 @@ export default function AdminLeavesPage() {
         { header: "Days", accessor: (r) => r.numberOfDays },
         { header: "Status", accessor: (r) => r.status },
         { header: "Reason", accessor: (r) => r.reason },
+        { header: "Emergency Contact", accessor: (r) => r.emergencyContact ?? "" },
       ],
       "leaves",
     );
@@ -361,8 +365,8 @@ export default function AdminLeavesPage() {
 
       {activeTab === "requests" && (
         <>
-          {/* Status Filter Tabs + Filters */}
-          <div className="flex flex-wrap items-center justify-between gap-3">
+          {/* Status tabs + search + type filter + bulk actions — one row */}
+          <div className="flex flex-wrap items-center gap-3">
             <div className="border-border-default bg-bg-muted flex w-fit gap-1 rounded-lg border p-1">
               {[
                 { value: "PENDING", label: "Pending", count: pendingCount },
@@ -393,35 +397,12 @@ export default function AdminLeavesPage() {
               ))}
             </div>
 
-            {selectedIds.size > 0 && (
-              <div className="flex items-center gap-2">
-                <span className="text-text-secondary text-sm">{selectedIds.size} selected</span>
-                <button
-                  onClick={() => void handleBulkApprove()}
-                  disabled={isBulkProcessing}
-                  className="bg-success-500 flex items-center gap-1 rounded-md px-3 py-1.5 text-sm text-white disabled:opacity-50"
-                >
-                  <CheckCheck size={14} /> Approve All
-                </button>
-                <button
-                  onClick={() => void handleBulkReject()}
-                  disabled={isBulkProcessing}
-                  className="bg-error-500 flex items-center gap-1 rounded-md px-3 py-1.5 text-sm text-white disabled:opacity-50"
-                >
-                  <X size={14} /> Reject All
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* Additional Filters */}
-          <div className="flex flex-wrap items-center gap-3">
             <SearchInput
               value={employeeSearch}
               onChange={setEmployeeSearch}
               placeholder="Search employee..."
               historyKey="leaves"
-              className="max-w-xs flex-1"
+              className="min-w-48 max-w-xs flex-1"
             />
             <Select
               value={leaveTypeFilter}
@@ -433,6 +414,26 @@ export default function AdminLeavesPage() {
               className="w-48"
             />
           </div>
+
+          {selectedIds.size > 0 && (
+            <div className="flex items-center justify-end gap-2">
+              <span className="text-text-secondary text-sm">{selectedIds.size} selected</span>
+              <button
+                onClick={() => void handleBulkApprove()}
+                disabled={isBulkProcessing}
+                className="bg-success-500 flex items-center gap-1 rounded-md px-3 py-1.5 text-sm text-white disabled:opacity-50"
+              >
+                <CheckCheck size={14} /> Approve All
+              </button>
+              <button
+                onClick={() => void handleBulkReject()}
+                disabled={isBulkProcessing}
+                className="bg-error-500 flex items-center gap-1 rounded-md px-3 py-1.5 text-sm text-white disabled:opacity-50"
+              >
+                <X size={14} /> Reject All
+              </button>
+            </div>
+          )}
 
           {/* Table */}
           {isLoading ? (
@@ -457,6 +458,9 @@ export default function AdminLeavesPage() {
                     <th className="text-text-secondary px-4 py-3 text-left font-medium">Dates</th>
                     <th className="text-text-secondary px-4 py-3 text-left font-medium">Days</th>
                     <th className="text-text-secondary px-4 py-3 text-left font-medium">Reason</th>
+                    <th className="text-text-secondary px-4 py-3 text-left font-medium">
+                      Emergency Contact
+                    </th>
                     <th className="text-text-secondary px-4 py-3 text-left font-medium">Status</th>
                     <th className="text-text-secondary px-4 py-3 text-left font-medium">
                       Requested
@@ -495,6 +499,18 @@ export default function AdminLeavesPage() {
                       <td className="px-4 py-3">{r.numberOfDays}</td>
                       <td className="text-text-secondary max-w-xs truncate px-4 py-3 text-xs">
                         {r.reason}
+                      </td>
+                      <td className="text-text-secondary px-4 py-3 text-xs">
+                        {r.emergencyContact ? (
+                          <a
+                            href={`tel:${r.emergencyContact}`}
+                            className="text-primary-600 hover:underline"
+                          >
+                            {r.emergencyContact}
+                          </a>
+                        ) : (
+                          <span className="text-text-muted">—</span>
+                        )}
                       </td>
                       <td className="px-4 py-3">
                         <span

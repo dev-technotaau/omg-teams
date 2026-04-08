@@ -99,8 +99,18 @@ export async function runArchiving(): Promise<{ archived: Record<string, number>
   const prisma = getPrisma();
   const results: Record<string, number> = {};
 
+  // §23.5 — Master archive threshold (months) is now configurable from the
+  // admin Settings page. The audit-log/login/notification thresholds are
+  // *relative* to the candidate threshold, preserving the original ratios
+  // (12/12/6/3 → 1.0x / 1.0x / 0.5x / 0.25x).
+  const { getSettingNumber } = await import("./settings.service.js");
+  const baseMonths = await getSettingNumber(
+    "archive_threshold_months",
+    THRESHOLDS.CANDIDATE_REPORT,
+  );
+
   // 1. Candidate Reports — completed + paid + older than threshold
-  const candidateCutoff = monthsAgo(THRESHOLDS.CANDIDATE_REPORT);
+  const candidateCutoff = monthsAgo(baseMonths);
   const candidates = await prisma.candidateReport.findMany({
     where: {
       status: "COMPLETE",
@@ -125,7 +135,7 @@ export async function runArchiving(): Promise<{ archived: Record<string, number>
   }
 
   // 2. Audit Logs — older than threshold
-  const auditCutoff = monthsAgo(THRESHOLDS.AUDIT_LOG);
+  const auditCutoff = monthsAgo(baseMonths);
   const auditLogs = await prisma.auditLog.findMany({
     where: { timestamp: { lt: auditCutoff } },
     take: 5000,
@@ -145,7 +155,7 @@ export async function runArchiving(): Promise<{ archived: Record<string, number>
   }
 
   // 3. Login History — older than threshold
-  const loginCutoff = monthsAgo(THRESHOLDS.LOGIN_HISTORY);
+  const loginCutoff = monthsAgo(Math.max(1, Math.floor(baseMonths * 0.5)));
   const loginLogs = await prisma.loginHistory.findMany({
     where: { createdAt: { lt: loginCutoff } },
     take: 5000,
@@ -165,7 +175,7 @@ export async function runArchiving(): Promise<{ archived: Record<string, number>
   }
 
   // 4. Notifications — older than threshold
-  const notifCutoff = monthsAgo(THRESHOLDS.NOTIFICATION);
+  const notifCutoff = monthsAgo(Math.max(1, Math.floor(baseMonths * 0.25)));
   const notifications = await prisma.notification.findMany({
     where: { createdAt: { lt: notifCutoff } },
     take: 5000,

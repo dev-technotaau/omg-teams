@@ -329,8 +329,14 @@ export async function createSchedule(data: {
 }) {
   const prisma = getPrisma();
 
-  // Parse time string (e.g. "09:30") into structured JSON for the timing column
-  const [hour, minute] = data.time.split(":").map(Number);
+  // Parse time string (e.g. "09:30") into structured JSON for the timing column.
+  // If empty/missing, fall back to the platform default (`report_default_schedule_time`).
+  let timeStr = data.time;
+  if (!timeStr) {
+    const { getSettingString } = await import("./settings.service.js");
+    timeStr = await getSettingString("report_default_schedule_time", "09:00");
+  }
+  const [hour, minute] = timeStr.split(":").map(Number);
 
   return prisma.scheduledReportConfig.create({
     data: {

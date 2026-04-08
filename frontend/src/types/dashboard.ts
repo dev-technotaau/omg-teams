@@ -10,6 +10,8 @@ export interface DashboardStats {
   pendingReports: number;
   targetValue: number;
   targetAchieved: number;
+  /** Which period the target applies to — null if recruiter has no target */
+  targetType: "DAILY" | "WEEKLY" | "MONTHLY" | null;
   activeRecruiters?: number;
 }
 

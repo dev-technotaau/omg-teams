@@ -269,6 +269,8 @@ export async function handleLoginVerify(req: Request, res: Response): Promise<vo
     response: z.record(z.string(), z.unknown()),
     challengeId: z.string().min(1),
     deviceId: z.string().min(1),
+    /** Admin session-conflict bypass — see auth.service.ts LoginInput */
+    confirmReplaceSession: z.boolean().optional(),
   });
   const body = schema.parse(req.body);
 
@@ -369,6 +371,9 @@ export async function handleLoginVerify(req: Request, res: Response): Promise<vo
       deviceId: body.deviceId,
       ipAddress: req.ip,
       userAgent: req.headers["user-agent"],
+      ...(body.confirmReplaceSession !== undefined && {
+        confirmReplaceSession: body.confirmReplaceSession,
+      }),
       geoLocation: {
         country: (req.headers["cf-ipcountry"] ?? req.headers["x-vercel-ip-country"] ?? null) as
           | string

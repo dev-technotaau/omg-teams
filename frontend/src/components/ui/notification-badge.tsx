@@ -18,7 +18,7 @@ export function NotificationBadge({ count, max = 99, className }: NotificationBa
     <span
       aria-label={`${count} notifications`}
       className={cn(
-        "absolute -top-1.5 -right-1.5 z-10",
+        "absolute top-0.5 right-0.5 z-10",
         "inline-flex items-center justify-center",
         "h-[18px] min-w-[18px] rounded-full px-1",
         "bg-error-500 text-[10px] leading-none font-bold text-white",

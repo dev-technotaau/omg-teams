@@ -19,7 +19,9 @@ export function ScrollToTop() {
     const main = document.querySelector("main");
     if (!main) return;
 
-    const onScroll = () => {
+    let frame = 0;
+    const compute = () => {
+      frame = 0;
       const { scrollTop, scrollHeight, clientHeight } = main;
       const maxScroll = scrollHeight - clientHeight;
       if (maxScroll <= 0) {
@@ -27,14 +29,22 @@ export function ScrollToTop() {
         setVisible(false);
         return;
       }
-      const pct = Math.min(1, scrollTop / maxScroll);
-      setScrollPct(pct);
+      setScrollPct(Math.min(1, scrollTop / maxScroll));
       setVisible(scrollTop > 200);
     };
 
+    const onScroll = () => {
+      // Coalesce scroll events to one update per animation frame
+      if (frame) return;
+      frame = requestAnimationFrame(compute);
+    };
+
     main.addEventListener("scroll", onScroll, { passive: true });
-    onScroll(); // initial check
-    return () => main.removeEventListener("scroll", onScroll);
+    compute(); // initial
+    return () => {
+      main.removeEventListener("scroll", onScroll);
+      if (frame) cancelAnimationFrame(frame);
+    };
   }, []);
 
   const scrollToTop = useCallback(() => {
@@ -81,7 +91,6 @@ export function ScrollToTop() {
           strokeLinecap="round"
           strokeDasharray={circumference}
           strokeDashoffset={strokeDashoffset}
-          className="transition-[stroke-dashoffset] duration-100 ease-out"
         />
       </svg>
       {/* Arrow icon */}

@@ -1,15 +1,21 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
 import {
   AlertCircle,
   ArrowDown,
   ArrowUp,
   CalendarOff,
   Clock,
+  Copy,
+  CreditCard,
   DollarSign,
   FileText,
+  Mail,
   Percent,
+  Receipt,
   Timer,
   TrendingUp,
   UserCheck,
@@ -18,8 +24,10 @@ import {
 import { useAuth } from "@/contexts/auth";
 import { getGreeting } from "@/utils/greeting";
 import { api } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import { Badge, Select } from "@/components/ui";
 import { DashboardSkeleton } from "@/components/ui/skeleton";
+import { PasskeyNudge } from "@/components/passkey-nudge";
 
 // ──────────────────────────────────────────────
 //  Admin Dashboard — Spec Section 6.2
@@ -43,13 +51,25 @@ interface AdminStats {
     employeeName: string;
     role: string;
     isLate: boolean;
+    /** Number of successful login events today for this user — when >1
+     *  the UI surfaces a "N sessions" badge so admins can see at a glance
+     *  who's been logging out and back in. */
+    sessionCount: number;
   }>;
   notLoggedIn: Array<{
     id: string;
     employeeName: string;
     role: string;
   }>;
-  pendingActions: { leaveRequests: number; kycVerifications: number; suspendedAccounts: number };
+  pendingActions: {
+    leaveRequests: number;
+    kycVerifications: number;
+    suspendedAccounts: number;
+    unresolvedDuplicates: number;
+    overdueInvoices: number;
+    unpaidInvoices: number;
+    pendingOfferLetters: number;
+  };
 }
 
 interface MonthlyAttendance {
@@ -73,29 +93,27 @@ const DATE_RANGE_OPTIONS = [
 export default function AdminDashboardPage() {
   const { user, isLoading: authLoading } = useAuth();
   const greeting = getGreeting(user?.name);
-  const [stats, setStats] = useState<AdminStats | null>(null);
-  const [monthlyAttendance, setMonthlyAttendance] = useState<MonthlyAttendance | null>(null);
   const [dateRange, setDateRange] = useState("today");
-  const [isLoading, setIsLoading] = useState(true);
 
-  const fetchStats = useCallback(async () => {
-    try {
-      const [statsRes, attendanceRes] = await Promise.all([
-        api.get<{ stats: AdminStats }>(`/dashboard/admin-stats?range=${dateRange}`),
-        api.get<MonthlyAttendance>("/dashboard/monthly-attendance"),
-      ]);
-      setStats(statsRes.data.stats);
-      setMonthlyAttendance(attendanceRes.data);
-    } catch {
-      // Fallback to zeros if endpoint fails
-    } finally {
-      setIsLoading(false);
-    }
-  }, [dateRange]);
-
-  useEffect(() => {
-    void fetchStats();
-  }, [fetchStats]);
+  const statsQuery = useQuery({
+    queryKey: [...qk.dashboard.admin(), "stats", dateRange] as const,
+    queryFn: async () => {
+      const r = await api.get<{ stats: AdminStats }>(
+        `/dashboard/admin-stats?range=${dateRange}`,
+      );
+      return r.data.stats;
+    },
+  });
+  const monthlyQuery = useQuery({
+    queryKey: [...qk.dashboard.admin(), "monthly-attendance"] as const,
+    queryFn: async () => {
+      const r = await api.get<MonthlyAttendance>("/dashboard/monthly-attendance");
+      return r.data;
+    },
+  });
+  const stats = statsQuery.data ?? null;
+  const monthlyAttendance = monthlyQuery.data ?? null;
+  const isLoading = statsQuery.isLoading || monthlyQuery.isLoading;
 
   if (authLoading || isLoading) return <DashboardSkeleton />;
 
@@ -111,6 +129,10 @@ export default function AdminDashboardPage() {
     leaveRequests: 0,
     kycVerifications: 0,
     suspendedAccounts: 0,
+    unresolvedDuplicates: 0,
+    overdueInvoices: 0,
+    unpaidInvoices: 0,
+    pendingOfferLetters: 0,
   };
 
   const attendance = [
@@ -206,10 +228,41 @@ export default function AdminDashboardPage() {
       icon: <Users size={16} />,
       color: "text-error-500",
     },
+    {
+      label: "Unresolved Duplicates",
+      count: pa.unresolvedDuplicates,
+      href: "/admin/duplicates",
+      icon: <Copy size={16} />,
+      color: "text-warning-500",
+    },
+    {
+      label: "Overdue Invoices",
+      count: pa.overdueInvoices,
+      href: "/admin/reports",
+      icon: <Receipt size={16} />,
+      color: "text-error-500",
+    },
+    {
+      label: "Unpaid Invoices",
+      count: pa.unpaidInvoices,
+      href: "/admin/reports",
+      icon: <CreditCard size={16} />,
+      color: "text-warning-500",
+    },
+    {
+      label: "Pending Offer Letters",
+      count: pa.pendingOfferLetters,
+      href: "/admin/offer-letters",
+      icon: <Mail size={16} />,
+      color: "text-info-500",
+    },
   ];
 
   return (
     <div className="space-y-6">
+      {/* §16 — Nudge admins to enrol a passkey if they have none yet */}
+      <PasskeyNudge />
+
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-text-primary text-2xl font-bold">Admin Dashboard</h1>
@@ -259,47 +312,108 @@ export default function AdminDashboardPage() {
         <div className="border-border-default bg-bg-surface rounded-lg border p-5">
           <div className="flex items-center justify-between">
             <h3 className="text-text-secondary text-sm font-medium">Monthly Attendance Rate</h3>
-            <div className="flex items-center gap-1 text-xs">
-              {monthlyAttendance.change >= 0 ? (
-                <ArrowUp size={14} className="text-success-500" />
-              ) : (
-                <ArrowDown size={14} className="text-error-500" />
+            <div
+              className={cn(
+                "flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium",
+                monthlyAttendance.change >= 0
+                  ? "bg-success-100 text-success-600"
+                  : "bg-error-100 text-error-600",
               )}
-              <span
-                className={monthlyAttendance.change >= 0 ? "text-success-500" : "text-error-500"}
-              >
-                {Math.abs(monthlyAttendance.change)}% vs last month
-              </span>
+            >
+              {monthlyAttendance.change >= 0 ? (
+                <ArrowUp size={14} />
+              ) : (
+                <ArrowDown size={14} />
+              )}
+              <span>{Math.abs(monthlyAttendance.change)}% vs last month</span>
             </div>
           </div>
-          <div className="mt-4 flex items-center gap-6">
-            {/* Circular progress gauge */}
-            <div className="relative h-24 w-24 shrink-0">
-              <svg className="h-24 w-24 -rotate-90" viewBox="0 0 100 100">
-                <circle cx="50" cy="50" r="42" fill="none" stroke="varbg-muted" strokeWidth="10" />
+
+          {/* Three-column layout fills the full width without padding empty
+              space — gauge | this/last month numbers | progress bar to 100% */}
+          <div className="mt-5 grid grid-cols-1 items-center gap-6 lg:grid-cols-[auto_1fr_1fr]">
+            {/* ── Circular gauge (left) ── */}
+            <div className="relative mx-auto h-32 w-32 shrink-0 lg:mx-0">
+              <svg
+                className="h-32 w-32 -rotate-90"
+                viewBox="0 0 100 100"
+                aria-hidden="true"
+              >
+                {/* Track */}
                 <circle
                   cx="50"
                   cy="50"
                   r="42"
                   fill="none"
-                  stroke="varprimary-500"
+                  className="stroke-bg-muted"
+                  strokeWidth="10"
+                />
+                {/* Progress — strokeDasharray uses 2πr ≈ 263.89, gauge fills
+                    proportionally to currentRate */}
+                <circle
+                  cx="50"
+                  cy="50"
+                  r="42"
+                  fill="none"
+                  className="stroke-primary-500 transition-[stroke-dasharray] duration-500"
                   strokeWidth="10"
                   strokeLinecap="round"
-                  strokeDasharray={`${(monthlyAttendance.currentRate / 100) * 264} 264`}
+                  strokeDasharray={`${(monthlyAttendance.currentRate / 100) * 263.89} 263.89`}
                 />
               </svg>
-              <div className="absolute inset-0 flex items-center justify-center">
-                <span className="text-text-primary text-xl font-bold">
-                  {monthlyAttendance.currentRate}%
+              <div className="absolute inset-0 flex flex-col items-center justify-center">
+                <span className="text-text-primary text-3xl font-bold leading-none">
+                  {monthlyAttendance.currentRate}
+                  <span className="text-text-muted text-base">%</span>
+                </span>
+                <span className="text-text-muted mt-1 text-[10px] uppercase tracking-wider">
+                  This month
                 </span>
               </div>
             </div>
-            <div className="space-y-2 text-sm">
-              <p className="text-text-secondary">
-                <span className="font-medium">This month:</span> {monthlyAttendance.currentRate}%
-              </p>
-              <p className="text-text-muted">
-                <span className="font-medium">Last month:</span> {monthlyAttendance.lastMonthRate}%
+
+            {/* ── This / Last month split (middle) ── */}
+            <div className="border-border-default grid grid-cols-2 gap-4 lg:border-l lg:border-r lg:px-6">
+              <div>
+                <p className="text-text-muted text-xs font-medium uppercase tracking-wider">
+                  This Month
+                </p>
+                <p className="text-text-primary mt-1 text-2xl font-bold">
+                  {monthlyAttendance.currentRate}
+                  <span className="text-text-muted text-base">%</span>
+                </p>
+              </div>
+              <div>
+                <p className="text-text-muted text-xs font-medium uppercase tracking-wider">
+                  Last Month
+                </p>
+                <p className="text-text-secondary mt-1 text-2xl font-bold">
+                  {monthlyAttendance.lastMonthRate}
+                  <span className="text-text-muted text-base">%</span>
+                </p>
+              </div>
+            </div>
+
+            {/* ── Progress bar to 100% target (right) ── */}
+            <div>
+              <div className="flex items-baseline justify-between">
+                <p className="text-text-muted text-xs font-medium uppercase tracking-wider">
+                  Progress to Goal
+                </p>
+                <p className="text-text-muted text-xs">100% target</p>
+              </div>
+              <div className="bg-bg-muted mt-3 h-3 w-full overflow-hidden rounded-full">
+                <div
+                  className="bg-primary-500 h-full rounded-full transition-all duration-500"
+                  style={{
+                    width: `${Math.min(100, Math.max(0, monthlyAttendance.currentRate))}%`,
+                  }}
+                />
+              </div>
+              <p className="text-text-muted mt-2 text-xs">
+                {monthlyAttendance.currentRate >= 100
+                  ? "Goal reached "
+                  : `${(100 - monthlyAttendance.currentRate).toFixed(0)}% to go`}
               </p>
             </div>
           </div>
@@ -308,9 +422,12 @@ export default function AdminDashboardPage() {
 
       {/* Logins + Alerts */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        {/* §6.2 — Today's Logins live list (Gap 12) */}
+        {/* §6.2 — Today's Attendance live list (Gap 12)
+            Sourced from AttendanceRecord (one row per user per day), so
+            each user appears exactly once with their first punch-in time.
+            Multi-session badge surfaces re-logins. */}
         <div className="border-border-default bg-bg-surface rounded-lg border p-5">
-          <h3 className="text-text-secondary text-sm font-medium">Today&apos;s Logins</h3>
+          <h3 className="text-text-secondary text-sm font-medium">Today&apos;s Attendance</h3>
           {stats?.logins && stats.logins.length > 0 ? (
             <div className="mt-3 max-h-48 space-y-1 overflow-y-auto">
               {stats.logins.map((login) => (
@@ -325,6 +442,18 @@ export default function AdminDashboardPage() {
                     <Badge variant="default" size="sm">
                       {login.role}
                     </Badge>
+                    {/* Multi-session badge — surfaces when a user has logged
+                        out and back in today. The first-login time (their
+                        actual punch-in) is what stays in the row's main
+                        timestamp; this badge just signals "they're not on
+                        their original session anymore". */}
+                    {login.sessionCount > 1 && (
+                      <span title={`${login.sessionCount} login events today`}>
+                        <Badge variant="primary" size="sm">
+                          {login.sessionCount} sessions
+                        </Badge>
+                      </span>
+                    )}
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="text-text-muted text-xs">
@@ -343,13 +472,13 @@ export default function AdminDashboardPage() {
               ))}
             </div>
           ) : (
-            <p className="text-text-muted mt-4 text-sm">No logins recorded yet.</p>
+            <p className="text-text-muted mt-4 text-sm">No attendance recorded yet.</p>
           )}
-          {/* §6.2 — Not Yet Logged In */}
+          {/* §6.2 — Not Yet Punched In */}
           {stats?.notLoggedIn && stats.notLoggedIn.length > 0 && (
             <>
               <h4 className="text-text-muted mt-4 text-xs font-semibold tracking-wider uppercase">
-                Not Yet Logged In ({stats.notLoggedIn.length})
+                Not Yet Punched In ({stats.notLoggedIn.length})
               </h4>
               <div className="mt-2 max-h-32 space-y-1 overflow-y-auto">
                 {stats.notLoggedIn.map((emp) => (

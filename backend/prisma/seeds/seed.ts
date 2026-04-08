@@ -2,6 +2,7 @@ import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import pg from "pg";
 import bcrypt from "bcryptjs";
+import { seedDropdownOptions } from "./dropdown-data.js";
 
 const pool = new pg.Pool({ connectionString: process.env["DATABASE_URL"] });
 const adapter = new PrismaPg(pool);
@@ -162,49 +163,55 @@ async function main(): Promise<void> {
   //  6. Platform Settings
   // ══════════════════════════════════════════════
 
+  // IMPORTANT: every key here MUST match what the admin Settings page reads
+  // (see frontend/.../admin/settings/page.tsx FIELD_DEFS) and what backend
+  // services read via getSetting*() helpers. If you add a new setting, add
+  // it here too — otherwise the field will appear empty in the UI even
+  // though the code uses its hardcoded fallback.
   const platformSettings = [
-    // Zone configuration
-    { category: "zone", key: "zone_set_a", value: ["WEST", "CENTRAL"] },
-    { category: "zone", key: "zone_set_b", value: ["EAST", "NORTH", "SOUTH"] },
+    // ── Attendance ──
+    { category: "attendance", key: "expected_login_time", value: "10:00" },
+    { category: "attendance", key: "grace_period_minutes", value: 15 },
+    { category: "attendance", key: "half_day_threshold_minutes", value: 240 },
+    { category: "attendance", key: "working_days", value: "Mon,Tue,Wed,Thu,Fri,Sat" },
+    { category: "attendance", key: "standard_day_minutes", value: 480 },
+    { category: "attendance", key: "break_deduction_minutes", value: 60 },
+    { category: "attendance", key: "excessive_late_threshold", value: 5 },
 
-    // Invoice
-    { category: "invoice", key: "invoice_prefix", value: "INV" },
-    { category: "invoice", key: "invoice_start_number", value: 1 },
-    { category: "invoice", key: "invoice_date_format", value: "DD/MM/YYYY" },
+    // ── Leave ──
+    { category: "leave", key: "leave_negative_balance", value: false },
+    { category: "leave", key: "leave_low_balance_threshold", value: 2 },
 
-    // Session & Security
-    { category: "session", key: "session_timeout_minutes", value: 30 },
-    { category: "session", key: "max_sessions_per_user", value: 5 },
-    { category: "session", key: "account_lockout_threshold", value: 5 },
-    { category: "session", key: "account_lockout_duration_minutes", value: 30 },
+    // ── Reports ──
+    { category: "reports", key: "report_retention_days", value: 30 },
+    { category: "reports", key: "report_default_schedule_time", value: "09:00" },
 
-    // Archive & Trash
-    { category: "archive", key: "auto_archive_months", value: 12 },
-    { category: "trash", key: "auto_purge_days", value: 90 },
+    // ── Invoice ──
+    { category: "invoice", key: "invoice_prefix", value: "HF" },
+    { category: "invoice", key: "invoice_date_format", value: "YYYY-MM-DD" },
+    { category: "invoice", key: "invoice_starting_serial", value: 1 },
 
-    // Upload limits
-    { category: "upload", key: "upload_daily_limit_mb", value: 100 },
-    { category: "upload", key: "max_file_size_mb", value: 25 },
+    // ── Data Management ──
+    { category: "data", key: "archive_threshold_months", value: 12 },
+    { category: "data", key: "trash_auto_purge_days", value: 90 },
 
-    // Platform branding
-    { category: "branding", key: "platform_name", value: "OMG Teams" },
-    { category: "branding", key: "platform_tagline", value: "Recruitment & Workforce Management" },
+    // ── Notifications ──
+    { category: "notification", key: "notification_admin_emails", value: "" },
+    { category: "notification", key: "notification_email_enabled", value: true },
+    { category: "notification", key: "notification_device_mismatch", value: true },
+    { category: "notification", key: "notification_suspicious_activity", value: true },
 
-    // Offer letter signatory defaults
-    { category: "offer_letter", key: "offer_letter_signatory_name", value: "Admin" },
+    // ── Offer Letter ──
+    { category: "offer_letter", key: "offer_letter_signatory_name", value: "Shalini Singh" },
     { category: "offer_letter", key: "offer_letter_signatory_title", value: "HR Manager" },
 
-    // Report defaults
-    { category: "report", key: "report_default_schedule_time", value: "09:00" },
-    { category: "report", key: "report_retention_days", value: 90 },
-
-    // Notification defaults
-    { category: "notification", key: "notification_retention_days", value: 30 },
-    { category: "notification", key: "notification_max_per_page", value: 50 },
-
-    // Maintenance mode (off by default)
+    // ── Maintenance Mode (managed via the Maintenance tab, not FIELD_DEFS) ──
     { category: "system", key: "maintenance_mode", value: false },
-    { category: "system", key: "maintenance_message", value: "The platform is currently under maintenance. Please check back shortly." },
+    {
+      category: "system",
+      key: "maintenance_message",
+      value: "The platform is currently under maintenance. Please check back shortly.",
+    },
   ];
 
   for (const setting of platformSettings) {
@@ -225,104 +232,10 @@ async function main(): Promise<void> {
   //  7. Default Dropdown Options (Master Data)
   // ══════════════════════════════════════════════
 
-  type DropdownSeed = {
-    category: "STATE" | "LOCATION" | "PROFILE" | "QUALIFICATION" | "NOTICE_PERIOD" | "DIPLOMA";
-    value: string;
-    label: string;
-    zoneSet?: "SET_A" | "SET_B" | null;
-    sortOrder: number;
-  };
-
-  const dropdownOptions: DropdownSeed[] = [
-    // ── States ──
-    { category: "STATE", value: "maharashtra", label: "Maharashtra", sortOrder: 1 },
-    { category: "STATE", value: "delhi", label: "Delhi", sortOrder: 2 },
-    { category: "STATE", value: "karnataka", label: "Karnataka", sortOrder: 3 },
-    { category: "STATE", value: "tamil_nadu", label: "Tamil Nadu", sortOrder: 4 },
-    { category: "STATE", value: "uttar_pradesh", label: "Uttar Pradesh", sortOrder: 5 },
-    { category: "STATE", value: "gujarat", label: "Gujarat", sortOrder: 6 },
-    { category: "STATE", value: "rajasthan", label: "Rajasthan", sortOrder: 7 },
-    { category: "STATE", value: "west_bengal", label: "West Bengal", sortOrder: 8 },
-    { category: "STATE", value: "telangana", label: "Telangana", sortOrder: 9 },
-    { category: "STATE", value: "andhra_pradesh", label: "Andhra Pradesh", sortOrder: 10 },
-    { category: "STATE", value: "madhya_pradesh", label: "Madhya Pradesh", sortOrder: 11 },
-    { category: "STATE", value: "punjab", label: "Punjab", sortOrder: 12 },
-    { category: "STATE", value: "haryana", label: "Haryana", sortOrder: 13 },
-    { category: "STATE", value: "bihar", label: "Bihar", sortOrder: 14 },
-    { category: "STATE", value: "kerala", label: "Kerala", sortOrder: 15 },
-
-    // ── Locations (Zone Set A — West + Central) ──
-    { category: "LOCATION", value: "mumbai", label: "Mumbai", zoneSet: "SET_A", sortOrder: 1 },
-    { category: "LOCATION", value: "pune", label: "Pune", zoneSet: "SET_A", sortOrder: 2 },
-    { category: "LOCATION", value: "ahmedabad", label: "Ahmedabad", zoneSet: "SET_A", sortOrder: 3 },
-    { category: "LOCATION", value: "surat", label: "Surat", zoneSet: "SET_A", sortOrder: 4 },
-    { category: "LOCATION", value: "nagpur", label: "Nagpur", zoneSet: "SET_A", sortOrder: 5 },
-    { category: "LOCATION", value: "indore", label: "Indore", zoneSet: "SET_A", sortOrder: 6 },
-    { category: "LOCATION", value: "bhopal", label: "Bhopal", zoneSet: "SET_A", sortOrder: 7 },
-
-    // ── Locations (Zone Set B — East + North + South) ──
-    { category: "LOCATION", value: "delhi", label: "Delhi", zoneSet: "SET_B", sortOrder: 1 },
-    { category: "LOCATION", value: "bangalore", label: "Bangalore", zoneSet: "SET_B", sortOrder: 2 },
-    { category: "LOCATION", value: "hyderabad", label: "Hyderabad", zoneSet: "SET_B", sortOrder: 3 },
-    { category: "LOCATION", value: "chennai", label: "Chennai", zoneSet: "SET_B", sortOrder: 4 },
-    { category: "LOCATION", value: "kolkata", label: "Kolkata", zoneSet: "SET_B", sortOrder: 5 },
-    { category: "LOCATION", value: "lucknow", label: "Lucknow", zoneSet: "SET_B", sortOrder: 6 },
-    { category: "LOCATION", value: "jaipur", label: "Jaipur", zoneSet: "SET_B", sortOrder: 7 },
-    { category: "LOCATION", value: "chandigarh", label: "Chandigarh", zoneSet: "SET_B", sortOrder: 8 },
-
-    // ── Profiles (Zone Set A) ──
-    { category: "PROFILE", value: "sales_executive", label: "Sales Executive", zoneSet: "SET_A", sortOrder: 1 },
-    { category: "PROFILE", value: "telecaller", label: "Telecaller", zoneSet: "SET_A", sortOrder: 2 },
-    { category: "PROFILE", value: "business_development", label: "Business Development", zoneSet: "SET_A", sortOrder: 3 },
-    { category: "PROFILE", value: "customer_service", label: "Customer Service", zoneSet: "SET_A", sortOrder: 4 },
-    { category: "PROFILE", value: "back_office", label: "Back Office", zoneSet: "SET_A", sortOrder: 5 },
-
-    // ── Profiles (Zone Set B) ──
-    { category: "PROFILE", value: "sales_executive", label: "Sales Executive", zoneSet: "SET_B", sortOrder: 1 },
-    { category: "PROFILE", value: "telecaller", label: "Telecaller", zoneSet: "SET_B", sortOrder: 2 },
-    { category: "PROFILE", value: "field_executive", label: "Field Executive", zoneSet: "SET_B", sortOrder: 3 },
-    { category: "PROFILE", value: "delivery_executive", label: "Delivery Executive", zoneSet: "SET_B", sortOrder: 4 },
-    { category: "PROFILE", value: "warehouse", label: "Warehouse", zoneSet: "SET_B", sortOrder: 5 },
-    { category: "PROFILE", value: "data_entry", label: "Data Entry Operator", zoneSet: "SET_B", sortOrder: 6 },
-
-    // ── Higher Qualifications ──
-    { category: "QUALIFICATION", value: "10th", label: "10th Pass", sortOrder: 1 },
-    { category: "QUALIFICATION", value: "12th", label: "12th Pass", sortOrder: 2 },
-    { category: "QUALIFICATION", value: "diploma", label: "Diploma", sortOrder: 3 },
-    { category: "QUALIFICATION", value: "graduate", label: "Graduate", sortOrder: 4 },
-    { category: "QUALIFICATION", value: "post_graduate", label: "Post Graduate", sortOrder: 5 },
-    { category: "QUALIFICATION", value: "mba", label: "MBA", sortOrder: 6 },
-    { category: "QUALIFICATION", value: "btech", label: "B.Tech / B.E.", sortOrder: 7 },
-    { category: "QUALIFICATION", value: "other", label: "Other", sortOrder: 8 },
-
-    // ── Notice Period ──
-    { category: "NOTICE_PERIOD", value: "immediate", label: "Immediate", sortOrder: 1 },
-    { category: "NOTICE_PERIOD", value: "7_days", label: "7 Days", sortOrder: 2 },
-    { category: "NOTICE_PERIOD", value: "15_days", label: "15 Days", sortOrder: 3 },
-    { category: "NOTICE_PERIOD", value: "30_days", label: "30 Days", sortOrder: 4 },
-    { category: "NOTICE_PERIOD", value: "60_days", label: "60 Days", sortOrder: 5 },
-    { category: "NOTICE_PERIOD", value: "90_days", label: "90 Days", sortOrder: 6 },
-    { category: "NOTICE_PERIOD", value: "currently_serving", label: "Currently Serving", sortOrder: 7 },
-
-    // ── Diploma (Part / Full) ──
-    { category: "DIPLOMA", value: "part", label: "Diploma (Part)", sortOrder: 1 },
-    { category: "DIPLOMA", value: "full", label: "Diploma (Full)", sortOrder: 2 },
-    { category: "DIPLOMA", value: "na", label: "N/A", sortOrder: 3 },
-  ];
-
-  // Use createMany with skipDuplicates (nullable zoneSet makes upsert complex)
-  const created = await prisma.dropdownOption.createMany({
-    data: dropdownOptions.map((opt) => ({
-      category: opt.category,
-      value: opt.value,
-      label: opt.label,
-      zoneSet: opt.zoneSet ?? null,
-      sortOrder: opt.sortOrder,
-      isActive: true,
-    })),
-    skipDuplicates: true,
-  });
-  console.log(`  Dropdown Options: ${created.count} created (${dropdownOptions.length} total, duplicates skipped)`);
+  // Dropdown master data (states/locations/profiles + the small flat lists)
+  // lives in a shared module so the one-shot backfill script can reuse it
+  // without copy-paste drift.
+  await seedDropdownOptions(prisma);
 
   // ══════════════════════════════════════════════
   //  8. Default Holidays (India — Current Year)

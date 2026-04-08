@@ -32,6 +32,9 @@ export const ROUTES = {
   // Documents
   DOCUMENTS: "/documents",
 
+  // Targets — recruiter view
+  MY_TARGETS: "/my-targets",
+
   // RM views
   MY_RECRUITERS: "/my-recruiters",
   MY_RECRUITER_DETAIL: (id: string) => `/my-recruiters/${id}`,
@@ -66,7 +69,7 @@ export const ROUTES = {
   ADMIN_HOLIDAYS: "/admin/holidays",
   ADMIN_EMAIL_TEMPLATES: "/admin/email-templates",
   ADMIN_IMPORT: "/admin/import",
-  ADMIN_AUDIT_LOGS: "/admin/audit-logs",
+  ADMIN_AUDIT_LOGS: "/admin/audit-log",
   ADMIN_WEBHOOKS: "/admin/webhooks",
   ADMIN_QUEUES: "/admin/queues",
   PASSKEYS: "/profile/passkeys",

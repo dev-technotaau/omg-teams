@@ -28,6 +28,8 @@ export async function startAllWorkers(): Promise<void> {
   const { startAbsentDetectionWorker } = await import("./absent-detection.worker.js");
   const { startSessionExpiryWorker } = await import("./session-expiry.worker.js");
   const { startBackupWorker } = await import("./backup.worker.js");
+  const { startTorListWorker } = await import("./tor-list.worker.js");
+  const { startImportWorker } = await import("./import.worker.js");
 
   activeWorkers.push(startEmailWorker());
   activeWorkers.push(startStorageWorker());
@@ -38,6 +40,8 @@ export async function startAllWorkers(): Promise<void> {
   activeWorkers.push(startAbsentDetectionWorker());
   activeWorkers.push(startSessionExpiryWorker());
   activeWorkers.push(startBackupWorker());
+  activeWorkers.push(startTorListWorker());
+  activeWorkers.push(startImportWorker());
 
   // Schedule repeatable jobs
   const { scheduleMidnightReset } = await import("./midnight-reset.queue.js");
@@ -53,6 +57,7 @@ export async function startAllWorkers(): Promise<void> {
   const { scheduleSessionExpiryChecker } = await import("./session-expiry.queue.js");
   const { scheduleNotificationCleanup } = await import("./notification.queue.js");
   const { scheduleDatabaseBackup } = await import("./backup.queue.js");
+  const { scheduleTorListRefresh, torListQueue } = await import("./tor-list.queue.js");
 
   await scheduleMidnightReset();
   await scheduleReportGeneration();
@@ -65,6 +70,11 @@ export async function startAllWorkers(): Promise<void> {
   await scheduleNotificationCleanup();
   await scheduleReportCleanup();
   await scheduleDatabaseBackup();
+  await scheduleTorListRefresh();
+  // §16 — kick off an immediate refresh on boot so the TOR set is populated
+  // even before the first cron tick. Otherwise the IP-reputation check is
+  // a no-op for the first 2h after a deploy.
+  await torListQueue.add("refresh-tor-exit-list", {}, { removeOnComplete: true });
 
   logger.info(`Started ${activeWorkers.length} job workers`);
 }

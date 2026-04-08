@@ -65,12 +65,51 @@ export async function bulkAssignCompany(ids: string[], companyId: string) {
 }
 
 /**
- * Bulk restore from trash.
+ * Bulk restore from trash. Items are grouped by entityType so each
+ * underlying Prisma model gets a single `updateMany`. Mirrors the friendly
+ * entity-type alphabet used by the trash service.
  */
-export async function bulkRestore(ids: string[]) {
+export interface BulkRestoreItem {
+  id: string;
+  entityType: "candidate" | "company" | "serviceProvider" | "hrManager" | "user";
+}
+
+export async function bulkRestore(items: BulkRestoreItem[]) {
   const prisma = getPrisma();
-  return prisma.candidateReport.updateMany({
-    where: { id: { in: ids } },
-    data: { deletedAt: null, deletedBy: null },
-  });
+  const data = { deletedAt: null, deletedBy: null };
+
+  const groups: Record<BulkRestoreItem["entityType"], string[]> = {
+    candidate: [],
+    company: [],
+    serviceProvider: [],
+    hrManager: [],
+    user: [],
+  };
+  for (const item of items) groups[item.entityType].push(item.id);
+
+  const results = await Promise.all([
+    groups.candidate.length
+      ? prisma.candidateReport.updateMany({ where: { id: { in: groups.candidate } }, data })
+      : Promise.resolve({ count: 0 }),
+    groups.company.length
+      ? prisma.company.updateMany({ where: { id: { in: groups.company } }, data })
+      : Promise.resolve({ count: 0 }),
+    groups.serviceProvider.length
+      ? prisma.serviceProvider.updateMany({
+          where: { id: { in: groups.serviceProvider } },
+          data,
+        })
+      : Promise.resolve({ count: 0 }),
+    groups.hrManager.length
+      ? prisma.hRManager.updateMany({ where: { id: { in: groups.hrManager } }, data })
+      : Promise.resolve({ count: 0 }),
+    groups.user.length
+      ? prisma.user.updateMany({
+          where: { id: { in: groups.user } },
+          data: { ...data, status: "ACTIVE" },
+        })
+      : Promise.resolve({ count: 0 }),
+  ]);
+
+  return { count: results.reduce((sum, r) => sum + r.count, 0) };
 }

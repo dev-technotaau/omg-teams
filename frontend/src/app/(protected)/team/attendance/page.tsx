@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState } from "react";
+import { useQuery, keepPreviousData } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
 import { Calendar } from "lucide-react";
 import { api } from "@/lib/api";
 import { TableSkeleton } from "@/components/ui/skeleton";
@@ -18,14 +20,12 @@ import type { PaginatedResponse } from "@/types/api";
 // ──────────────────────────────────────────────
 
 export default function TeamAttendancePage() {
-  const [data, setData] = useState<PaginatedResponse<AttendanceRecord> | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
   const [dateFilter, setDateFilter] = useState(todayISO());
   const [page, setPage] = useState(1);
 
-  const fetchData = useCallback(async () => {
-    setIsLoading(true);
-    try {
+  const teamQuery = useQuery({
+    queryKey: [...qk.attendance.list({ scope: "team", page, dateFilter })] as const,
+    queryFn: async () => {
       const params: Record<string, string> = {
         page: String(page),
         limit: String(DEFAULT_LARGE_PAGE_SIZE),
@@ -34,17 +34,12 @@ export default function TeamAttendancePage() {
       const res = await api.get<PaginatedResponse<AttendanceRecord>>("/attendance/team", {
         params,
       });
-      setData(res.data);
-    } catch {
-      /* silent */
-    } finally {
-      setIsLoading(false);
-    }
-  }, [page, dateFilter]);
-
-  useEffect(() => {
-    void fetchData();
-  }, [fetchData]);
+      return res.data;
+    },
+    placeholderData: keepPreviousData,
+  });
+  const data = teamQuery.data ?? null;
+  const isLoading = teamQuery.isLoading;
 
   const records = data?.data ?? [];
   const presentCount = records.filter((r) => r.status.startsWith("PRESENT")).length;

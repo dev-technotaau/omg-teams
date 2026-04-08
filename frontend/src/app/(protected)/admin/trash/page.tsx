@@ -1,10 +1,12 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo } from "react";
+import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
 import { Trash2, RotateCcw, Clock, Package, Users as UsersIcon, Building } from "lucide-react";
 import { toast } from "sonner";
 import { api, extractApiError } from "@/lib/api";
-import { bulkRestore } from "@/services/bulk.service";
+import { bulkRestore, type BulkRestoreItem } from "@/services/bulk.service";
 import { exportToXLSX } from "@/utils/export-table";
 import { pluralize } from "@/utils/format";
 import { DEFAULT_LARGE_PAGE_SIZE } from "@/constants/pagination";
@@ -19,6 +21,17 @@ import {
   Card,
 } from "@/components/ui";
 import type { Column, ViewType, RowDensity } from "@/components/ui";
+import { useTabSearchParam } from "@/hooks";
+
+const TRASH_ENTITY_IDS = [
+  "",
+  "candidate",
+  "company",
+  "serviceProvider",
+  "hrManager",
+  "user",
+] as const;
+type TrashEntityId = (typeof TRASH_ENTITY_IDS)[number];
 
 // ──────────────────────────────────────────────
 //  Trash / Deleted Items — Spec Section 23.7
@@ -69,9 +82,12 @@ function formatDate(iso: string) {
 }
 
 export default function TrashPage() {
-  const [data, setData] = useState<TrashResponse | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [entityFilter, setEntityFilter] = useState("");
+  const qc = useQueryClient();
+  const [entityFilter, setEntityFilter] = useTabSearchParam<TrashEntityId>(
+    "entity",
+    "",
+    TRASH_ENTITY_IDS,
+  );
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -84,9 +100,9 @@ export default function TrashPage() {
     item?: TrashItem;
   } | null>(null);
 
-  const fetchTrash = useCallback(async () => {
-    setIsLoading(true);
-    try {
+  const trashQuery = useQuery({
+    queryKey: qk.trash.list({ page, entityFilter, search }),
+    queryFn: async () => {
       const params: Record<string, string> = {
         page: String(page),
         limit: String(DEFAULT_LARGE_PAGE_SIZE),
@@ -94,17 +110,16 @@ export default function TrashPage() {
       if (entityFilter) params["entityType"] = entityFilter;
       if (search) params["search"] = search;
       const res = await api.get<TrashResponse>("/trash", { params });
-      setData(res.data);
-    } catch (err) {
-      toast.error(extractApiError(err).message);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [page, entityFilter, search]);
-
-  useEffect(() => {
-    void fetchTrash();
-  }, [fetchTrash]);
+      return res.data;
+    },
+    placeholderData: keepPreviousData,
+  });
+  const data = trashQuery.data ?? null;
+  const isLoading = trashQuery.isLoading;
+  const fetchTrash = useCallback(
+    () => qc.invalidateQueries({ queryKey: qk.trash.lists() }),
+    [qc],
+  );
 
   const handleConfirm = async () => {
     if (!confirmAction) return;
@@ -130,10 +145,17 @@ export default function TrashPage() {
           }
           toast.success("Trash emptied");
           break;
-        case "bulkRestore":
-          await bulkRestore(Array.from(selected));
+        case "bulkRestore": {
+          const items: BulkRestoreItem[] = (data?.data ?? [])
+            .filter((i) => selected.has(i.id))
+            .map((i) => ({
+              id: i.id,
+              entityType: i.entityType as BulkRestoreItem["entityType"],
+            }));
+          if (items.length > 0) await bulkRestore(items);
           toast.success(`${pluralize(selected.size, "item")} restored`);
           break;
+        }
         case "bulkDelete":
           for (const id of selected) {
             const item = data?.data.find((i) => i.id === id);
@@ -216,7 +238,7 @@ export default function TrashPage() {
     return { total, candidates, companies, users };
   }, [data]);
 
-  const totalPages = data?.pagination.totalPages ?? 1;
+  const totalPages = data?.pagination?.totalPages ?? 1;
 
   const columns: Column<TrashItem>[] = [
     {
@@ -429,7 +451,7 @@ export default function TrashPage() {
         tabs={ENTITY_TABS}
         activeTab={entityFilter}
         onChange={(tabId) => {
-          setEntityFilter(tabId);
+          setEntityFilter(tabId as TrashEntityId);
           setPage(1);
           setSelected(new Set());
         }}
@@ -470,7 +492,7 @@ export default function TrashPage() {
         ]}
         page={page}
         totalPages={totalPages}
-        total={data?.pagination.total}
+        total={data?.pagination?.total}
         pageSize={DEFAULT_LARGE_PAGE_SIZE}
         onPageChange={setPage}
         enableColumnVisibility

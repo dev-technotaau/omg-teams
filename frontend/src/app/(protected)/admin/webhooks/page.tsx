@@ -1,6 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
+import { toastApiError } from "@/lib/query-helpers";
 import {
   Webhook,
   Plus,
@@ -44,9 +47,7 @@ import {
 // ──────────────────────────────────────────────
 
 export default function WebhooksPage() {
-  const [webhooks, setWebhooks] = useState<WebhookEndpoint[]>([]);
-  const [availableEvents, setAvailableEvents] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
+  const qc = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -58,23 +59,92 @@ export default function WebhooksPage() {
   const [formUrl, setFormUrl] = useState("");
   const [formEvents, setFormEvents] = useState<string[]>([]);
   const [formDescription, setFormDescription] = useState("");
-  const [saving, setSaving] = useState(false);
 
-  const fetchData = useCallback(async () => {
-    try {
-      const [wh, events] = await Promise.all([listWebhooks(), listWebhookEvents()]);
-      setWebhooks(wh);
-      setAvailableEvents(events);
-    } catch {
-      toast.error("Failed to load webhooks");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  // Two parallel queries — webhooks list (mutates often) and the available
+  // event types (effectively static, longer staleTime).
+  const webhooksQuery = useQuery({
+    queryKey: qk.webhooks.list(),
+    queryFn: listWebhooks,
+  });
+  const eventsQuery = useQuery({
+    queryKey: [...qk.webhooks.all(), "events"] as const,
+    queryFn: listWebhookEvents,
+    staleTime: 60 * 60 * 1000, // 1h — event types rarely change
+  });
+  const webhooks = webhooksQuery.data ?? [];
+  const availableEvents = eventsQuery.data ?? [];
+  const loading = webhooksQuery.isLoading || eventsQuery.isLoading;
 
-  useEffect(() => {
-    void fetchData();
-  }, [fetchData]);
+  const invalidate = () => qc.invalidateQueries({ queryKey: qk.webhooks.lists() });
+
+  const createMutation = useMutation({
+    mutationFn: createWebhook,
+    onSuccess: (result) => {
+      setNewSecret(result.secret);
+      setShowCreate(false);
+      resetForm();
+      void invalidate();
+      toast.success("Webhook created. Copy the signing secret — it won't be shown again.");
+    },
+    onError: (err) => toastApiError(err, "Failed to create webhook"),
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: Parameters<typeof updateWebhook>[1] }) =>
+      updateWebhook(id, payload),
+    onSuccess: () => {
+      setEditId(null);
+      resetForm();
+      void invalidate();
+      toast.success("Webhook updated");
+    },
+    onError: (err) => toastApiError(err, "Failed to update webhook"),
+  });
+
+  // Optimistic toggle — flip isActive in the cache instantly.
+  const toggleActiveMutation = useMutation({
+    mutationFn: ({ id, isActive }: { id: string; isActive: boolean }) =>
+      updateWebhook(id, { isActive }),
+    onMutate: async ({ id, isActive }) => {
+      const key = qk.webhooks.list();
+      await qc.cancelQueries({ queryKey: key });
+      const prev = qc.getQueryData<WebhookEndpoint[]>(key);
+      qc.setQueryData<WebhookEndpoint[]>(key, (old) =>
+        (old ?? []).map((w) => (w.id === id ? { ...w, isActive } : w)),
+      );
+      return { prev, key };
+    },
+    onError: (err, _vars, ctx) => {
+      if (ctx) qc.setQueryData(ctx.key, ctx.prev);
+      toastApiError(err, "Failed to toggle webhook");
+    },
+    onSuccess: (_d, vars) =>
+      toast.success(vars.isActive ? "Webhook enabled" : "Webhook disabled"),
+    onSettled: () => void invalidate(),
+  });
+
+  // Optimistic delete.
+  const deleteMutation = useMutation({
+    mutationFn: deleteWebhook,
+    onMutate: async (id: string) => {
+      const key = qk.webhooks.list();
+      await qc.cancelQueries({ queryKey: key });
+      const prev = qc.getQueryData<WebhookEndpoint[]>(key);
+      qc.setQueryData<WebhookEndpoint[]>(key, (old) => (old ?? []).filter((w) => w.id !== id));
+      return { prev, key };
+    },
+    onError: (err, _id, ctx) => {
+      if (ctx) qc.setQueryData(ctx.key, ctx.prev);
+      toastApiError(err, "Failed to delete webhook");
+    },
+    onSuccess: () => {
+      setDeleteId(null);
+      toast.success("Webhook deleted");
+    },
+    onSettled: () => void invalidate(),
+  });
+
+  const saving = createMutation.isPending || updateMutation.isPending;
 
   const resetForm = () => {
     setFormUrl("");
@@ -82,67 +152,34 @@ export default function WebhooksPage() {
     setFormDescription("");
   };
 
-  const handleCreate = async () => {
+  const handleCreate = () => {
     if (!formUrl || formEvents.length === 0) return;
-    setSaving(true);
-    try {
-      const result = await createWebhook({
-        url: formUrl,
-        events: formEvents,
-        description: formDescription || undefined,
-      });
-      setNewSecret(result.secret);
-      setShowCreate(false);
-      resetForm();
-      void fetchData();
-      toast.success("Webhook created. Copy the signing secret — it won't be shown again.");
-    } catch {
-      toast.error("Failed to create webhook");
-    } finally {
-      setSaving(false);
-    }
+    createMutation.mutate({
+      url: formUrl,
+      events: formEvents,
+      ...(formDescription ? { description: formDescription } : {}),
+    });
   };
 
-  const handleUpdate = async () => {
+  const handleUpdate = () => {
     if (!editId || !formUrl || formEvents.length === 0) return;
-    setSaving(true);
-    try {
-      await updateWebhook(editId, {
+    updateMutation.mutate({
+      id: editId,
+      payload: {
         url: formUrl,
         events: formEvents,
-        description: formDescription || undefined,
-      });
-      setEditId(null);
-      resetForm();
-      void fetchData();
-      toast.success("Webhook updated");
-    } catch {
-      toast.error("Failed to update webhook");
-    } finally {
-      setSaving(false);
-    }
+        ...(formDescription ? { description: formDescription } : {}),
+      },
+    });
   };
 
-  const handleDelete = async () => {
+  const handleDelete = () => {
     if (!deleteId) return;
-    try {
-      await deleteWebhook(deleteId);
-      setDeleteId(null);
-      void fetchData();
-      toast.success("Webhook deleted");
-    } catch {
-      toast.error("Failed to delete webhook");
-    }
+    deleteMutation.mutate(deleteId);
   };
 
-  const handleToggleActive = async (wh: WebhookEndpoint) => {
-    try {
-      await updateWebhook(wh.id, { isActive: !wh.isActive });
-      void fetchData();
-      toast.success(wh.isActive ? "Webhook disabled" : "Webhook enabled");
-    } catch {
-      toast.error("Failed to toggle webhook");
-    }
+  const handleToggleActive = (wh: WebhookEndpoint) => {
+    toggleActiveMutation.mutate({ id: wh.id, isActive: !wh.isActive });
   };
 
   const handleTest = async (id: string) => {
@@ -199,6 +236,7 @@ export default function WebhooksPage() {
             resetForm();
             setShowCreate(true);
           }}
+          className="whitespace-nowrap"
         >
           Add Webhook
         </Button>

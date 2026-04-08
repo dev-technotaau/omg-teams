@@ -59,6 +59,11 @@ export interface SelectProps extends Omit<React.SelectHTMLAttributes<HTMLSelectE
    * dropdowns where the select triggers an action rather than storing state.
    */
   resetOnSelect?: boolean;
+  /**
+   * Show an inline search input at the top of the dropdown that substring-
+   * filters options as the user types. Enter selects the highlighted match.
+   */
+  searchable?: boolean;
 }
 
 const sizeClasses: Record<SelectSize, string> = {
@@ -121,6 +126,7 @@ export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
       required,
       multiple = false,
       resetOnSelect = false,
+      searchable = false,
       ...rest
     },
     ref,
@@ -130,7 +136,9 @@ export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
     const buttonRef = useRef<HTMLButtonElement>(null);
     const hiddenRef = useRef<HTMLSelectElement>(null);
     const listRef = useRef<HTMLUListElement>(null);
+    const searchInputRef = useRef<HTMLInputElement>(null);
     const typeaheadRef = useRef({ buffer: "", timer: 0 });
+    const [searchQuery, setSearchQuery] = useState("");
 
     // Forward the hidden-select ref outward
     React.useImperativeHandle(ref, () => hiddenRef.current as HTMLSelectElement, []);
@@ -154,6 +162,8 @@ export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
     useEffect(() => {
       if (value === undefined) return;
       if (multiple) {
+        // reason: controlled value sync from parent prop
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setInternalMulti(toArray(value));
       } else {
         setInternalSingle(Array.isArray(value) ? "" : String(value));
@@ -166,7 +176,19 @@ export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
 
     const enabledOptions = useMemo(() => options.filter((o) => !o.disabled), [options]);
 
-    const selectedValues = multiple ? internalMulti : internalSingle ? [internalSingle] : [];
+    // §searchable — Substring filter when searchable. Empty/blank options
+    // (placeholder rows like { value: "", label: "Select state" }) are hidden
+    // while a query is active so they don't get accidentally picked.
+    const displayedOptions = useMemo(() => {
+      if (!searchable || !searchQuery.trim()) return options;
+      const q = searchQuery.trim().toLowerCase();
+      return options.filter((o) => o.value !== "" && o.label.toLowerCase().includes(q));
+    }, [options, searchable, searchQuery]);
+
+    const selectedValues = useMemo(
+      () => (multiple ? internalMulti : internalSingle ? [internalSingle] : []),
+      [multiple, internalMulti, internalSingle],
+    );
     const selectedSet = useMemo(() => new Set(selectedValues), [selectedValues]);
 
     // Display label on the button
@@ -259,7 +281,8 @@ export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
         const target = e.target as Node;
         if (
           !buttonRef.current?.contains(target) &&
-          !listRef.current?.contains(target)
+          !listRef.current?.contains(target) &&
+          !searchInputRef.current?.contains(target)
         ) {
           setIsOpen(false);
         }
@@ -280,6 +303,7 @@ export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
     const openMenu = useCallback(() => {
       if (disabled) return;
       setIsOpen(true);
+      if (searchable) setSearchQuery("");
       // Highlight current selection (or first selected in multi, or first enabled)
       if (multiple) {
         if (internalMulti.length > 0) {
@@ -296,26 +320,43 @@ export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
           setHighlightedIndex(options.findIndex((o) => !o.disabled));
         }
       }
-    }, [disabled, options, internalSingle, internalMulti, multiple]);
+    }, [disabled, options, internalSingle, internalMulti, multiple, searchable]);
+
+    // §searchable — Auto-focus the search input when the menu opens, and
+    // reset highlight to the first match whenever the query changes.
+    useEffect(() => {
+      if (!isOpen || !searchable) return;
+      // Defer until after the portal has mounted
+      const t = window.setTimeout(() => searchInputRef.current?.focus(), 0);
+      return () => window.clearTimeout(t);
+    }, [isOpen, searchable]);
+
+    useEffect(() => {
+      if (!searchable || !isOpen) return;
+      const firstEnabled = displayedOptions.findIndex((o) => !o.disabled);
+      // reason: reset highlight when filter results change
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setHighlightedIndex(firstEnabled);
+    }, [searchable, searchQuery, displayedOptions, isOpen]);
 
     const moveHighlight = useCallback(
       (direction: 1 | -1) => {
-        if (!options.length) return;
+        if (!displayedOptions.length) return;
         setHighlightedIndex((prev) => {
           let next = prev;
-          for (let i = 0; i < options.length; i++) {
-            next = (next + direction + options.length) % options.length;
-            if (!options[next]?.disabled) return next;
+          for (let i = 0; i < displayedOptions.length; i++) {
+            next = (next + direction + displayedOptions.length) % displayedOptions.length;
+            if (!displayedOptions[next]?.disabled) return next;
           }
           return prev;
         });
       },
-      [options],
+      [displayedOptions],
     );
 
     const selectHighlighted = useCallback(() => {
       if (highlightedIndex < 0) return;
-      const opt = options[highlightedIndex];
+      const opt = displayedOptions[highlightedIndex];
       if (!opt || opt.disabled) return;
       if (multiple) {
         toggleMultiValue(opt.value);
@@ -325,7 +366,7 @@ export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
         setIsOpen(false);
         buttonRef.current?.focus();
       }
-    }, [highlightedIndex, options, multiple, toggleMultiValue, commitSingleValue]);
+    }, [highlightedIndex, displayedOptions, multiple, toggleMultiValue, commitSingleValue]);
 
     const handleKeyDown = useCallback(
       (e: React.KeyboardEvent<HTMLButtonElement>) => {
@@ -350,12 +391,12 @@ export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
             break;
           case "Home":
             e.preventDefault();
-            setHighlightedIndex(options.findIndex((o) => !o.disabled));
+            setHighlightedIndex(displayedOptions.findIndex((o) => !o.disabled));
             break;
           case "End":
             e.preventDefault();
-            for (let i = options.length - 1; i >= 0; i--) {
-              if (!options[i]?.disabled) {
+            for (let i = displayedOptions.length - 1; i >= 0; i--) {
+              if (!displayedOptions[i]?.disabled) {
                 setHighlightedIndex(i);
                 break;
               }
@@ -375,7 +416,8 @@ export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
             setIsOpen(false);
             break;
           default:
-            // Type-ahead
+            // Type-ahead — disabled in searchable mode (the input handles text)
+            if (searchable) break;
             if (e.key.length === 1 && /[\w\s]/.test(e.key)) {
               window.clearTimeout(typeaheadRef.current.timer);
               typeaheadRef.current.buffer += e.key.toLowerCase();
@@ -392,7 +434,7 @@ export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
             }
         }
       },
-      [disabled, isOpen, openMenu, moveHighlight, options, selectHighlighted, enabledOptions],
+      [disabled, isOpen, openMenu, moveHighlight, displayedOptions, selectHighlighted, enabledOptions, searchable, options],
     );
 
     // The hidden <select> needs its value passed correctly for controlled mode
@@ -452,7 +494,6 @@ export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
             onKeyDown={handleKeyDown}
             aria-haspopup="listbox"
             aria-expanded={isOpen}
-            aria-invalid={!!error}
             aria-describedby={
               error ? `${selectId}-error` : helpText ? `${selectId}-help` : undefined
             }
@@ -486,15 +527,51 @@ export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
           {isOpen &&
             typeof document !== "undefined" &&
             createPortal(
+              <div
+                style={menuStyle}
+                className="animate-fade-in bg-bg-surface-raised border-border-default z-9999 flex flex-col overflow-hidden rounded-md border shadow-xl"
+              >
+                {searchable && (
+                  <div className="border-border-default border-b p-1.5">
+                    <input
+                      ref={searchInputRef}
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Search..."
+                      className="bg-bg-input text-text-primary border-border-default focus:border-border-focus focus:ring-primary-500 h-8 w-full rounded border px-2 text-sm focus:ring-1 focus:outline-hidden"
+                      onKeyDown={(e) => {
+                        if (e.key === "ArrowDown") {
+                          e.preventDefault();
+                          moveHighlight(1);
+                        } else if (e.key === "ArrowUp") {
+                          e.preventDefault();
+                          moveHighlight(-1);
+                        } else if (e.key === "Enter") {
+                          e.preventDefault();
+                          selectHighlighted();
+                        } else if (e.key === "Escape") {
+                          e.preventDefault();
+                          setIsOpen(false);
+                          buttonRef.current?.focus();
+                        } else if (e.key === "Tab") {
+                          setIsOpen(false);
+                        }
+                      }}
+                    />
+                  </div>
+                )}
               <ul
                 ref={listRef}
                 role="listbox"
                 aria-labelledby={selectId}
                 aria-multiselectable={multiple}
-                style={menuStyle}
-                className="animate-fade-in bg-bg-surface-raised border-border-default z-9999 overflow-y-auto rounded-md border py-1 shadow-xl"
+                className="overflow-y-auto py-1"
               >
-                {options.map((opt, idx) => {
+                {displayedOptions.length === 0 && (
+                  <li className="text-text-muted px-3 py-2 text-sm">No matches</li>
+                )}
+                {displayedOptions.map((opt, idx) => {
                   const isSelected = selectedSet.has(opt.value);
                   const isHighlighted = idx === highlightedIndex;
                   return (
@@ -540,7 +617,8 @@ export const Select = React.forwardRef<HTMLSelectElement, SelectProps>(
                     </li>
                   );
                 })}
-              </ul>,
+              </ul>
+              </div>,
               document.body,
             )}
         </div>

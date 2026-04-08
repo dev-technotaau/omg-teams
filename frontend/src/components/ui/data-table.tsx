@@ -26,6 +26,7 @@ import {
 import { Drawer } from "./drawer";
 import { Select } from "./select";
 import { cn } from "@/lib/utils";
+import { useClickOutside } from "@/hooks/use-click-outside";
 import { TableSkeleton } from "./skeleton";
 import { EmptyState } from "./empty-state";
 import { PAGE_SIZE_OPTIONS } from "@/constants/pagination";
@@ -221,6 +222,19 @@ export function DataTable<T>({
     return init;
   });
   const [showColumnMenu, setShowColumnMenu] = useState(false);
+  const columnMenuRef = useRef<HTMLDivElement>(null);
+  // Close column visibility dropdown on outside click / touch + Escape key
+  useClickOutside(columnMenuRef, () => {
+    if (showColumnMenu) setShowColumnMenu(false);
+  });
+  useEffect(() => {
+    if (!showColumnMenu) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShowColumnMenu(false);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [showColumnMenu]);
 
   const visibleColumns = useMemo(
     () => columns.filter((col) => columnVisibility[col.key] !== false),
@@ -536,12 +550,16 @@ export function DataTable<T>({
               : (row as Record<string, unknown>)[col.key] != null
                 ? String((row as Record<string, unknown>)[col.key])
                 : "";
+            // Don't propagate clicks from the actions column — buttons inside
+            // should not also trigger the row's detail drawer / onRowClick.
+            const isActionsCell = col.key === "actions";
 
             return (
               <td
                 key={col.key}
+                onClick={isActionsCell ? (e) => e.stopPropagation() : undefined}
                 className={cn(
-                  "text-text-primary",
+                  "text-text-primary align-middle",
                   cellPad,
                   alignClasses[col.align ?? "left"],
                   col.className,
@@ -709,18 +727,23 @@ export function DataTable<T>({
           )}
           {/* Column visibility */}
           {enableColumnVisibility && (
-            <div className="relative">
+            <div className="relative" ref={columnMenuRef}>
               <button
                 type="button"
                 onClick={() => setShowColumnMenu((v) => !v)}
                 className="border-border-default bg-bg-surface text-text-primary hover:bg-bg-hover inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition"
                 aria-label="Toggle columns"
+                aria-expanded={showColumnMenu}
+                aria-haspopup="true"
               >
                 <Columns3 size={14} />
                 Columns
               </button>
               {showColumnMenu && (
-                <div className="border-border-default bg-bg-surface-raised absolute right-0 z-20 mt-1 w-48 rounded-lg border p-2 shadow-lg">
+                <div
+                  role="menu"
+                  className="border-border-default bg-bg-surface-raised absolute right-0 z-20 mt-1 w-48 rounded-lg border p-2 shadow-lg"
+                >
                   {columns
                     .filter((c) => c.hideable !== false && c.key !== "actions")
                     .map((col) => (
@@ -880,7 +903,7 @@ export function DataTable<T>({
                       key={col.key}
                       style={col.width ? { width: col.width } : undefined}
                       className={cn(
-                        "text-text-secondary font-medium whitespace-nowrap",
+                        "text-text-secondary align-middle font-medium whitespace-nowrap",
                         headerPad,
                         alignClasses[col.align ?? "left"],
                         canSort && "hover:text-text-primary cursor-pointer select-none",
@@ -903,9 +926,9 @@ export function DataTable<T>({
                         isSorted ? (sortDir === "asc" ? "ascending" : "descending") : undefined
                       }
                     >
-                      <span className="inline-flex items-center gap-1">
-                        {col.header}
-                        {canSort && (
+                      {canSort ? (
+                        <span className="inline-flex items-center gap-1 align-middle">
+                          {col.header}
                           <span className="inline-flex flex-col" aria-hidden="true">
                             {isSorted ? (
                               sortDir === "asc" ? (
@@ -917,8 +940,10 @@ export function DataTable<T>({
                               <ChevronsUpDown size={14} className="opacity-40" />
                             )}
                           </span>
-                        )}
-                      </span>
+                        </span>
+                      ) : (
+                        col.header
+                      )}
                     </th>
                   );
                 })}
@@ -1063,7 +1088,7 @@ export function DataTable<T>({
                   value: String(opt),
                   label: String(opt),
                 }))}
-                className="w-20"
+                className="w-20 min-w-0"
               />
             </div>
           </div>

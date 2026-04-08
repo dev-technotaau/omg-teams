@@ -9,6 +9,7 @@ export interface LeaveRequest {
   numberOfDays: number;
   isHalfDay?: boolean;
   reason: string;
+  emergencyContact?: string | null;
   status: string;
   rejectionReason?: string | null;
   createdAt: string;

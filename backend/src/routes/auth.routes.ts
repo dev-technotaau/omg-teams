@@ -23,12 +23,23 @@ import { requireAuth, requireAdmin } from "../middleware/auth.js";
 
 const router = Router();
 
-// §16, §24.9 — Login-specific rate limiting (stricter than global)
+// §16, §24.9 — Login-specific rate limiting (stricter than global).
+// Keyed PER-IP across all identifiers/roles so an attacker on one IP cannot
+// fan out across hundreds of Employee IDs to enumerate or brute-force. We
+// rely on `app.set("trust proxy", 1)` for the correct client IP behind the
+// reverse proxy. Counts every login attempt — success OR failure — to cap
+// total request volume regardless of outcome.
 const loginLimiter = rateLimit({
   windowMs: env.AUTH_RATE_LIMIT_WINDOW_MS,
   max: env.AUTH_RATE_LIMIT_MAX_ATTEMPTS,
   standardHeaders: true,
   legacyHeaders: false,
+  // Explicit IP-only keying — do NOT mix in identifier/role here, otherwise
+  // the limit becomes per-account and an attacker can bypass it by rotating
+  // the identifier in each request. The default `ipKeyGenerator` handles
+  // IPv6 prefix collapsing correctly.
+  keyGenerator: (req) => req.ip ?? "unknown",
+  skipSuccessfulRequests: false,
   message: { error: "Too many login attempts. Please try again later." },
 });
 

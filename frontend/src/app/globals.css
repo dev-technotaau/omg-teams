@@ -420,3 +420,11 @@ body {
     @bottom-right { content: "Page " counter(page) " of " counter(pages); font-size: 8pt; color: #999; }
   }
 }
+
+/* Hide Edge/IE's built-in password reveal control — we ship our own
+   show/hide eye button on every password field, and the native one
+   double-stamps it on Chromium-Edge. */
+input::-ms-reveal,
+input::-ms-clear {
+  display: none;
+}

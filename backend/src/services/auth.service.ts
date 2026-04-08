@@ -1,9 +1,12 @@
+import crypto from "node:crypto";
 import { type LoginMethod, type Prisma, type Role } from "@prisma/client";
+import bcrypt from "bcryptjs";
 import { verifyBackupCode } from "./backup-code.service.js";
 import { verifyPassword } from "./password.service.js";
 import {
   createSession,
   destroySession,
+  getUserSessionId,
   isAccountLocked,
   recordFailedAttempt,
   lockAccount,
@@ -15,6 +18,8 @@ import { setAuthCookies, clearAuthCookies, setDeviceIdCookie } from "../config/c
 import { getPrisma } from "../config/database.js";
 import { env } from "../config/env.js";
 import { ErrorCode } from "../constants/error-codes.js";
+import { HttpStatus } from "../constants/http-status.js";
+import { AppError } from "../exceptions/app-error.js";
 import { UnauthorizedError } from "../exceptions/unauthorized-error.js";
 import { logger } from "../instrument.js";
 import { verifyTurnstile } from "../utils/turnstile.js";
@@ -30,11 +35,33 @@ function toNull<T>(value: T | undefined): T | null {
 //  Spec Section 4 — Complete Login/Logout Flow
 // ──────────────────────────────────────────────
 
+/**
+ * Pre-computed bcrypt hash used in the "user not found" branch to equalize
+ * timing with the "wrong password" branch. Without this, the user-not-found
+ * path skips bcrypt entirely (~100ms faster), giving an attacker a clear
+ * timing oracle to enumerate valid Employee IDs / emails.
+ *
+ * The hash is generated lazily on first use against a random password so the
+ * actual plaintext is never knowable, and reused for the lifetime of the
+ * process (verifyPassword on a fixed hash takes ~constant time).
+ */
+let DUMMY_HASH: string | null = null;
+async function getDummyHash(): Promise<string> {
+  // 12 rounds matches password.service.ts SALT_ROUNDS — must stay in sync.
+  DUMMY_HASH ??= await bcrypt.hash(crypto.randomBytes(16).toString("hex"), 12);
+  return DUMMY_HASH;
+}
+
 export interface LoginInput {
   /** Employee ID for Recruiter/RM, email for Admin */
   identifier: string;
   password: string;
-  role: "ADMIN" | "RECRUITER" | "REPORTING_MANAGER";
+  /**
+   * "TEAM" is a client-side bucket that covers both RECRUITER and
+   * REPORTING_MANAGER — the actual role is resolved from the user record
+   * during credential lookup. ADMIN must still be sent explicitly.
+   */
+  role: "ADMIN" | "TEAM" | "RECRUITER" | "REPORTING_MANAGER";
   deviceId: string;
   turnstileToken: string;
   /** One-time backup code for device lock bypass (§23.16) */
@@ -42,6 +69,16 @@ export interface LoginInput {
   ipAddress?: string | undefined;
   userAgent?: string | undefined;
   geoLocation?: Record<string, unknown> | undefined;
+  /** §16 — Cloudflare threat score (0-100) from cf-threat-score header */
+  cfThreatScore?: number | undefined;
+  /**
+   * Admin-only — when an admin already has an active session on another
+   * device, the first login attempt returns 409 SESSION_EXISTS. The client
+   * shows a confirmation dialog and re-submits with this flag set to `true`
+   * to proceed, which will atomically replace the old session via
+   * single-session enforcement in createSession().
+   */
+  confirmReplaceSession?: boolean | undefined;
 }
 
 export interface LoginResult {
@@ -77,6 +114,8 @@ export interface FinalizeLoginInput {
   geoLocation?: Record<string, unknown> | undefined;
   /** For login history — Employee ID or email that was used */
   identifier?: string | undefined;
+  /** Admin-only session-conflict bypass — see LoginInput.confirmReplaceSession */
+  confirmReplaceSession?: boolean | undefined;
 }
 
 /**
@@ -179,6 +218,79 @@ export async function finalizeLogin(
         );
       }
     }
+
+    // §16 — Login anomaly check (geo baseline + impossible-travel).
+    // Runs only for non-admin (admins are exempt — they legitimately log
+    // in from anywhere) and only AFTER device binding has been satisfied,
+    // so a stolen device cookie still gets caught here.
+    //
+    // The check is gated by successful credential verification + device
+    // match, so an attacker without those can never probe the baseline.
+    const { evaluateUserAnomaly } = await import("./login-anomaly.service.js");
+    const anomalyVerdict = await evaluateUserAnomaly(user.id, input.geoLocation);
+    if (!anomalyVerdict.allowed) {
+      // For new-country (allowBackupCode: true): a valid backup code in the
+      // request bypasses the block, same UX as device-mismatch.
+      // For impossible-travel (allowBackupCode: false): no bypass — this is
+      // definitionally fraud, no realistic legit cause.
+      let bypassed = false;
+      if (anomalyVerdict.allowBackupCode && input.backupCode) {
+        const codeValid = await verifyBackupCode(user.id, input.backupCode);
+        if (codeValid) {
+          bypassed = true;
+          loginMethod = "BACKUP_CODE";
+          logger.info("Login anomaly bypassed via backup code", {
+            userId: user.id,
+            reason: anomalyVerdict.reason,
+          });
+          void import("./notification-triggers.js").then(({ onBackupCodeUsed }) =>
+            onBackupCodeUsed(user.id),
+          );
+        }
+      }
+
+      if (!bypassed) {
+        await logFinalizeAttempt(user.id, input, false, `Anomaly: ${anomalyVerdict.reason}`);
+        void checkSuspiciousActivity(user.id);
+        void import("./notification-triggers.js").then(({ onLoginAnomalyBlocked }) =>
+          onLoginAnomalyBlocked(user.id, anomalyVerdict.reason, anomalyVerdict.country),
+        );
+        throw new UnauthorizedError(
+          anomalyVerdict.allowBackupCode
+            ? "Login from a new location. Use a backup code or contact admin."
+            : "Login blocked due to suspicious activity. Contact admin.",
+          ErrorCode.INVALID_CREDENTIALS,
+        );
+      }
+    }
+  }
+
+  // ── Admin session-conflict check ──
+  //
+  // Admins are exempt from device-binding, so an admin who already has a
+  // live session on Device A and tries to log in from Device B would
+  // ordinarily get silently kicked off Device A by createSession's
+  // single-session enforcement. That's a footgun: the admin on Device A
+  // suddenly gets logged out with no idea why.
+  //
+  // To make this explicit, the FIRST attempt from Device B returns 409
+  // SESSION_EXISTS so the client can show a "you're logged in elsewhere,
+  // continue?" confirmation dialog. If the admin clicks "continue", the
+  // client re-submits the login with `confirmReplaceSession: true` and the
+  // old session is atomically replaced (same single-session enforcement).
+  //
+  // Recruiters and reporting managers don't need this — device binding
+  // already prevents them from logging in on a second device entirely.
+  if (user.role === "ADMIN" && input.confirmReplaceSession !== true) {
+    const existingSessionId = await getUserSessionId(user.id);
+    if (existingSessionId) {
+      await logFinalizeAttempt(user.id, input, false, "Active session on another device");
+      throw new AppError(
+        "You are currently logged in on another device. Continuing will log you out from all other devices.",
+        HttpStatus.CONFLICT,
+        ErrorCode.SESSION_EXISTS,
+      );
+    }
   }
 
   // Create session
@@ -250,6 +362,7 @@ async function logFinalizeAttempt(
         attemptedDeviceId: toNull(input.deviceId),
         ip: toNull(input.ipAddress),
         userAgent: toNull(input.userAgent),
+        geoLocation: (input.geoLocation as Prisma.InputJsonValue) ?? undefined,
         success,
         failureReason: toNull(failureReason),
         loginMethod,
@@ -281,6 +394,8 @@ export interface PasskeyLoginInput {
   ipAddress?: string | undefined;
   userAgent?: string | undefined;
   geoLocation?: Record<string, unknown> | undefined;
+  /** Admin-only session-conflict bypass — see LoginInput.confirmReplaceSession */
+  confirmReplaceSession?: boolean | undefined;
 }
 
 /**
@@ -297,6 +412,7 @@ export async function passkeyLogin(input: PasskeyLoginInput, res: Response): Pro
       userAgent: input.userAgent,
       geoLocation: input.geoLocation,
       identifier: input.user.email,
+      confirmReplaceSession: input.confirmReplaceSession,
     },
     res,
   );
@@ -308,6 +424,21 @@ export async function passkeyLogin(input: PasskeyLoginInput, res: Response): Pro
  */
 export async function login(input: LoginInput, res: Response): Promise<LoginResult> {
   const prisma = getPrisma();
+
+  // §16 — IP reputation check (TOR exits, high CF threat score). Hard-block,
+  // no bypass. Runs BEFORE captcha + credential lookup so credential-stuffing
+  // bots from Tor never reach bcrypt. Recruiters/RMs do not legitimately use
+  // Tor or VPNs (per ops policy), and admins are exempt downstream so the
+  // small risk of admin-on-Tor is also blocked outright at this layer.
+  const { evaluateIpReputation } = await import("./login-anomaly.service.js");
+  const ipVerdict = await evaluateIpReputation(input.ipAddress, input.cfThreatScore);
+  if (!ipVerdict.allowed) {
+    await logLoginAttempt(null, input, false, `IP blocked: ${ipVerdict.reason}`);
+    throw new UnauthorizedError(
+      input.role === "ADMIN" ? "Invalid email or password" : "Invalid Employee ID or password",
+      ErrorCode.INVALID_CREDENTIALS,
+    );
+  }
 
   // Step 1: Validate Turnstile captcha
   const turnstileValid = await verifyTurnstile(input.turnstileToken, input.ipAddress);
@@ -322,6 +453,16 @@ export async function login(input: LoginInput, res: Response): Promise<LoginResu
     user = await prisma.user.findFirst({
       where: { email: input.identifier, role: "ADMIN" },
     });
+  } else if (input.role === "TEAM") {
+    // Combined Recruiter/Reporting Manager login — match on employeeId
+    // alone and constrain to non-admin team roles. The actual role is read
+    // off the user record from here on out.
+    user = await prisma.user.findFirst({
+      where: {
+        employeeId: input.identifier,
+        role: { in: ["RECRUITER", "REPORTING_MANAGER"] },
+      },
+    });
   } else {
     user = await prisma.user.findFirst({
       where: { employeeId: input.identifier, role: input.role },
@@ -329,6 +470,11 @@ export async function login(input: LoginInput, res: Response): Promise<LoginResu
   }
 
   if (!user) {
+    // §16 enumeration mitigation — equalize timing with the wrong-password
+    // branch by running a dummy bcrypt verify. Without this, the response is
+    // ~100ms faster for unknown identifiers, giving attackers a timing oracle
+    // to enumerate valid Employee IDs / admin emails.
+    await verifyPassword(input.password, await getDummyHash());
     await logLoginAttempt(null, input, false, "User not found");
     throw new UnauthorizedError(
       input.role === "ADMIN" ? "Invalid email or password" : "Invalid Employee ID or password",
@@ -336,12 +482,25 @@ export async function login(input: LoginInput, res: Response): Promise<LoginResu
     );
   }
 
-  // Step 2: Account lockout check
+  // Step 2: Account lockout check.
+  //
+  // §16 enumeration mitigation — when locked, we deliberately:
+  //   1. Run a dummy bcrypt verify so timing matches the wrong-password
+  //      branch (no fast-path oracle for "this account is locked").
+  //   2. Return the same generic "Invalid credentials" string the
+  //      not-found / wrong-password branches return, instead of the
+  //      previous "Account temporarily locked. Contact admin." message
+  //      that confirmed the account exists AND was locked.
+  //
+  // The legitimate user is still informed: `onAccountLockout` (fired the
+  // moment lockout occurs further down this function) sends them an email
+  // notification, so they don't need the API response to tell them.
   if (await isAccountLocked(user.id)) {
+    await verifyPassword(input.password, await getDummyHash());
     await logLoginAttempt(user.id, input, false, "Account locked");
     throw new UnauthorizedError(
-      "Account temporarily locked. Contact admin.",
-      ErrorCode.ACCOUNT_LOCKED,
+      input.role === "ADMIN" ? "Invalid email or password" : "Invalid Employee ID or password",
+      ErrorCode.INVALID_CREDENTIALS,
     );
   }
 
@@ -379,6 +538,7 @@ export async function login(input: LoginInput, res: Response): Promise<LoginResu
       userAgent: input.userAgent,
       geoLocation: input.geoLocation,
       identifier: input.identifier,
+      confirmReplaceSession: input.confirmReplaceSession,
     },
     res,
   );
@@ -481,6 +641,7 @@ async function logLoginAttempt(
         attemptedDeviceId: toNull(input.deviceId),
         ip: toNull(input.ipAddress),
         userAgent: toNull(input.userAgent),
+        geoLocation: (input.geoLocation as Prisma.InputJsonValue) ?? undefined,
         success,
         failureReason: toNull(failureReason),
         loginMethod,

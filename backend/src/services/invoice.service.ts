@@ -59,13 +59,27 @@ export async function generateInvoiceNumber(): Promise<string> {
   // Wrap in serializable transaction for concurrency safety (§14)
   return prisma.$transaction(
     async (tx) => {
-      const prefixSetting = await tx.platformSetting.findUnique({
-        where: { key: "invoice_prefix" },
-      });
-      const prefix = prefixSetting ? (prefixSetting.value as string) : "HF";
+      const [prefixSetting, dateFmtSetting, startSerialSetting] = await Promise.all([
+        tx.platformSetting.findUnique({ where: { key: "invoice_prefix" } }),
+        tx.platformSetting.findUnique({ where: { key: "invoice_date_format" } }),
+        tx.platformSetting.findUnique({ where: { key: "invoice_starting_serial" } }),
+      ]);
+      const prefix = prefixSetting?.value ? String(prefixSetting.value) : "HF";
+      const dateFmt = dateFmtSetting?.value ? String(dateFmtSetting.value) : "YYYYMMDD";
+      const startSerial = startSerialSetting?.value ? Number(startSerialSetting.value) : 1;
 
       const now = new Date();
-      const datePart = now.toISOString().slice(0, 10).replace(/-/g, "");
+      const yyyy = now.getFullYear().toString();
+      const mm = String(now.getMonth() + 1).padStart(2, "0");
+      const dd = String(now.getDate()).padStart(2, "0");
+      const datePart =
+        dateFmt === "DD/MM/YYYY"
+          ? `${dd}${mm}${yyyy}`
+          : dateFmt === "MM/DD/YYYY"
+            ? `${mm}${dd}${yyyy}`
+            : dateFmt === "YYYY-MM-DD"
+              ? `${yyyy}${mm}${dd}`
+              : `${yyyy}${mm}${dd}`;
 
       // Check both Invoice table and legacy CandidateReport invoiceNumber
       const [lastInvoice, lastLegacy] = await Promise.all([
@@ -96,7 +110,10 @@ export async function generateInvoiceNumber(): Promise<string> {
         }
       }
 
-      const serialPart = (maxSerial + 1).toString().padStart(3, "0");
+      // Honor `invoice_starting_serial` only when there's no prior invoice
+      // for today (otherwise we'd reset back below the latest one).
+      const nextSerial = maxSerial > 0 ? maxSerial + 1 : Math.max(1, startSerial);
+      const serialPart = nextSerial.toString().padStart(3, "0");
       return `${prefix}-${datePart}-${serialPart}`;
     },
     { isolationLevel: "Serializable" },

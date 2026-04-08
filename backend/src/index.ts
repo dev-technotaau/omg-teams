@@ -61,6 +61,12 @@ async function bootstrap(): Promise<void> {
 
   await initOpenTelemetry();
   await initializeServices();
+
+  // Ensure every PlatformSetting key the admin UI shows has a row in DB.
+  // Idempotent — only inserts missing keys, never overwrites existing values.
+  const { ensureDefaultsOnBoot } = await import("./services/settings.service.js");
+  await ensureDefaultsOnBoot();
+
   await startAllWorkers();
 
   const app = createApp();

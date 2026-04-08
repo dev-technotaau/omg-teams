@@ -1,12 +1,18 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
 import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { Card, Badge, Avatar, DataTable, Tabs, Progress, TableSkeleton } from "@/components/ui";
 import type { Column } from "@/components/ui";
+import { useTabSearchParam } from "@/hooks";
+
+const RECRUITER_DETAIL_TAB_IDS = ["performance", "submissions", "attendance", "leave"] as const;
+type RecruiterDetailTabId = (typeof RECRUITER_DETAIL_TAB_IDS)[number];
 
 // ──────────────────────────────────────────────
 //  Recruiter Detail (Read-only) — Spec Section 7
@@ -70,7 +76,11 @@ export default function RecruiterDetailPage() {
 
   const [recruiter, setRecruiter] = useState<RecruiterDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState("performance");
+  const [activeTab, setActiveTab] = useTabSearchParam<RecruiterDetailTabId>(
+    "tab",
+    "performance",
+    RECRUITER_DETAIL_TAB_IDS,
+  );
   const [tabLoading, setTabLoading] = useState(false);
 
   // Tab data
@@ -83,21 +93,25 @@ export default function RecruiterDetailPage() {
     completionRate: number;
   } | null>(null);
 
+  // Server state — recruiter detail. Sync into local state because the rest
+  // of the page mutates `recruiter` directly through several setters.
+  const recruiterQuery = useQuery({
+    queryKey: qk.myRecruiters.detail(recruiterId),
+    queryFn: async () => {
+      const res = await api.get<{ user: RecruiterDetail }>(`/users/${recruiterId}/team-view`);
+      return res.data.user ?? (res.data as unknown as RecruiterDetail);
+    },
+  });
   useEffect(() => {
-    const fetch = async () => {
-      try {
-        // §7 — Use team-view endpoint (RM-accessible, not admin-only)
-        const res = await api.get<{ user: RecruiterDetail }>(`/users/${recruiterId}/team-view`);
-        setRecruiter(res.data.user ?? (res.data as unknown as RecruiterDetail));
-      } catch {
-        toast.error("Failed to load recruiter");
-        router.push("/my-recruiters");
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    void fetch();
-  }, [recruiterId, router]);
+    if (recruiterQuery.data) {
+      setRecruiter(recruiterQuery.data);
+      setIsLoading(false);
+    }
+    if (recruiterQuery.isError) {
+      toast.error("Failed to load recruiter");
+      router.push("/my-recruiters");
+    }
+  }, [recruiterQuery.data, recruiterQuery.isError, router]);
 
   const fetchTabData = useCallback(
     async (tab: string) => {
@@ -329,7 +343,12 @@ export default function RecruiterDetailPage() {
         </div>
       </Card>
 
-      <Tabs tabs={TAB_ITEMS} activeTab={activeTab} onChange={setActiveTab} variant="underline" />
+      <Tabs
+        tabs={TAB_ITEMS}
+        activeTab={activeTab}
+        onChange={(id) => setActiveTab(id as RecruiterDetailTabId)}
+        variant="underline"
+      />
 
       {tabLoading ? (
         <TableSkeleton />

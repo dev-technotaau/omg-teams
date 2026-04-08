@@ -5,16 +5,30 @@ import StarterKit from "@tiptap/starter-kit";
 import Underline from "@tiptap/extension-underline";
 import TextAlign from "@tiptap/extension-text-align";
 import { TextStyle } from "@tiptap/extension-text-style";
+
+// TextStyle doesn't include a fontSize attribute by default, and
+// @tiptap/extension-font-size isn't installed — extend the mark to add one.
+const TextStyleWithFontSize = TextStyle.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      fontSize: {
+        default: null,
+        parseHTML: (element) => (element as HTMLElement).style.fontSize || null,
+        renderHTML: (attributes) => {
+          if (!(attributes as { fontSize?: string }).fontSize) return {};
+          return { style: `font-size: ${(attributes as { fontSize: string }).fontSize}` };
+        },
+      },
+    };
+  },
+});
 import Color from "@tiptap/extension-color";
-import Highlight from "@tiptap/extension-highlight";
 import Link from "@tiptap/extension-link";
-import Image from "@tiptap/extension-image";
 import { Table } from "@tiptap/extension-table";
 import TableRow from "@tiptap/extension-table-row";
 import TableCell from "@tiptap/extension-table-cell";
 import TableHeader from "@tiptap/extension-table-header";
-import Subscript from "@tiptap/extension-subscript";
-import Superscript from "@tiptap/extension-superscript";
 import Placeholder from "@tiptap/extension-placeholder";
 import CharacterCount from "@tiptap/extension-character-count";
 import HorizontalRule from "@tiptap/extension-horizontal-rule";
@@ -24,7 +38,6 @@ import {
   Bold,
   Italic,
   Underline as UnderlineIcon,
-  Strikethrough,
   AlignLeft,
   AlignCenter,
   AlignRight,
@@ -34,21 +47,14 @@ import {
   Heading1,
   Heading2,
   Heading3,
-  Quote,
   Minus,
   Link as LinkIcon,
-  Image as ImageIcon,
   Table as TableIcon,
   Undo,
   Redo,
   RemoveFormatting,
-  Code,
-  Subscript as SubIcon,
-  Superscript as SupIcon,
   Maximize2,
   Minimize2,
-  FileCode,
-  Search,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Select } from "@/components/ui";
@@ -92,21 +98,20 @@ export function TiptapEditor({
     extensions: [
       StarterKit.configure({
         heading: { levels: [1, 2, 3, 4, 5, 6] },
+        strike: false,
+        blockquote: false,
+        codeBlock: false,
       }),
       Underline,
       TextAlign.configure({ types: ["heading", "paragraph"] }),
-      TextStyle,
+      TextStyleWithFontSize,
       Color,
-      Highlight.configure({ multicolor: true }),
       FontFamily,
       Link.configure({ openOnClick: false }),
-      Image,
       Table.configure({ resizable: true }),
       TableRow,
       TableCell,
       TableHeader,
-      Subscript,
-      Superscript,
       HorizontalRule,
       Placeholder.configure({ placeholder }),
       CharacterCount.configure({ limit: charLimit }),
@@ -117,7 +122,8 @@ export function TiptapEditor({
     },
     editorProps: {
       attributes: {
-        class: "prose prose-sm max-w-none focus:outline-none min-h-[200px] px-4 py-3",
+        class:
+          "tiptap-editor prose prose-sm max-w-none focus:outline-none min-h-[200px] px-4 py-3 [&_h1]:text-[1.75em] [&_h1]:font-bold [&_h1]:mt-4 [&_h1]:mb-2 [&_h2]:text-[1.4em] [&_h2]:font-bold [&_h2]:mt-3 [&_h2]:mb-2 [&_h3]:text-[1.15em] [&_h3]:font-semibold [&_h3]:mt-2 [&_h3]:mb-1 [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:list-decimal [&_ol]:pl-6 [&_p]:my-1",
       },
     },
   });
@@ -137,7 +143,6 @@ export function TiptapEditor({
   );
 
   const [isFullScreen, setIsFullScreen] = useState(false);
-  const [showSource, setShowSource] = useState(false);
 
   if (!editor) return null;
 
@@ -179,27 +184,6 @@ export function TiptapEditor({
             title="Underline"
           >
             <UnderlineIcon size={14} />
-          </ToolbarBtn>
-          <ToolbarBtn
-            active={editor.isActive("strike")}
-            onClick={() => editor.chain().focus().toggleStrike().run()}
-            title="Strikethrough"
-          >
-            <Strikethrough size={14} />
-          </ToolbarBtn>
-          <ToolbarBtn
-            active={editor.isActive("subscript")}
-            onClick={() => editor.chain().focus().toggleSubscript().run()}
-            title="Subscript"
-          >
-            <SubIcon size={14} />
-          </ToolbarBtn>
-          <ToolbarBtn
-            active={editor.isActive("superscript")}
-            onClick={() => editor.chain().focus().toggleSuperscript().run()}
-            title="Superscript"
-          >
-            <SupIcon size={14} />
           </ToolbarBtn>
         </ToolbarGroup>
 
@@ -283,20 +267,6 @@ export function TiptapEditor({
             <ListOrdered size={14} />
           </ToolbarBtn>
           <ToolbarBtn
-            active={editor.isActive("blockquote")}
-            onClick={() => editor.chain().focus().toggleBlockquote().run()}
-            title="Blockquote"
-          >
-            <Quote size={14} />
-          </ToolbarBtn>
-          <ToolbarBtn
-            active={editor.isActive("codeBlock")}
-            onClick={() => editor.chain().focus().toggleCodeBlock().run()}
-            title="Code Block"
-          >
-            <Code size={14} />
-          </ToolbarBtn>
-          <ToolbarBtn
             onClick={() => editor.chain().focus().setHorizontalRule().run()}
             title="Horizontal Rule"
           >
@@ -317,15 +287,6 @@ export function TiptapEditor({
             title="Insert Link"
           >
             <LinkIcon size={14} />
-          </ToolbarBtn>
-          <ToolbarBtn
-            onClick={() => {
-              const url = prompt("Enter image URL:");
-              if (url) editor.chain().focus().setImage({ src: url }).run();
-            }}
-            title="Insert Image"
-          >
-            <ImageIcon size={14} />
           </ToolbarBtn>
           <ToolbarBtn
             onClick={() =>
@@ -375,14 +336,6 @@ export function TiptapEditor({
           title="Text Color"
           onChange={(e) => editor.chain().focus().setColor(e.target.value).run()}
         />
-        <input
-          type="color"
-          className="h-6 w-6 cursor-pointer rounded border-0"
-          title="Highlight"
-          defaultValue="#ffff00"
-          onChange={(e) => editor.chain().focus().toggleHighlight({ color: e.target.value }).run()}
-        />
-
         <ToolbarSep />
 
         {/* Undo/Redo + Clear */}
@@ -465,27 +418,6 @@ export function TiptapEditor({
             className="w-20"
           />
 
-          {/* Line spacing */}
-          <Select
-            size="sm"
-            resetOnSelect
-            placeholder="Spacing"
-            options={["1", "1.15", "1.5", "2"].map((s) => ({ value: s, label: `${s}x` }))}
-            onChange={(e) => {
-              if (e.target.value) {
-                editor.chain().focus().setMark("textStyle", { lineHeight: e.target.value }).run();
-              }
-            }}
-            className="w-24"
-          />
-
-          {/* Page break */}
-          <ToolbarBtn
-            onClick={() => editor.chain().focus().setHorizontalRule().run()}
-            title="Page Break / Divider"
-          >
-            <span className="text-[10px] font-bold">PB</span>
-          </ToolbarBtn>
         </ToolbarGroup>
       </div>
 
@@ -509,30 +441,6 @@ export function TiptapEditor({
         <div className="flex items-center gap-1">
           {isLimit && <span className="font-medium">Character limit reached</span>}
           {isWarning && !isLimit && <span className="font-medium">Approaching limit</span>}
-          {/* Find — trigger browser native find (Ctrl+F) */}
-          <button
-            type="button"
-            onClick={() => {
-              // Trigger browser's native find dialog via keyboard shortcut simulation
-              document.execCommand("find");
-            }}
-            className="text-text-muted hover:text-text-primary rounded p-1"
-            title="Find (Ctrl+F)"
-          >
-            <Search size={12} />
-          </button>
-          {/* Source code view toggle */}
-          <button
-            type="button"
-            onClick={() => setShowSource((v) => !v)}
-            className={cn(
-              "rounded p-1",
-              showSource ? "text-primary-600" : "text-text-muted hover:text-text-primary",
-            )}
-            title="Toggle HTML source"
-          >
-            <FileCode size={12} />
-          </button>
           {/* Full-screen toggle */}
           <button
             type="button"
@@ -545,17 +453,6 @@ export function TiptapEditor({
         </div>
       </div>
 
-      {/* §29.4.1.3 — Source code view (raw HTML) */}
-      {showSource && (
-        <div className="border-border-default border-t">
-          <textarea
-            value={editor.getHTML()}
-            onChange={(e) => editor.commands.setContent(e.target.value)}
-            className="bg-bg-muted w-full p-3 font-mono text-xs"
-            rows={8}
-          />
-        </div>
-      )}
     </div>
   );
 }

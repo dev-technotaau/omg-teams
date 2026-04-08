@@ -1,6 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
+import { toastApiError } from "@/lib/query-helpers";
 import { Plus, Building2, ChevronDown, ChevronRight, Trash2, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -31,8 +34,7 @@ import {
 } from "@/components/ui";
 
 export default function CompaniesPage() {
-  const [companies, setCompanies] = useState<Company[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const qc = useQueryClient();
   const [search, setSearch] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
@@ -60,131 +62,178 @@ export default function CompaniesPage() {
   } | null>(null);
   const [deleteHRTarget, setDeleteHRTarget] = useState<{ id: string; name: string } | null>(null);
 
-  const fetchData = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      setCompanies(await listCompanies(search || undefined));
-    } finally {
-      setIsLoading(false);
-    }
-  }, [search]);
+  // Server state — companies query, keyed by search so each search hits cache.
+  const { data: companies = [], isLoading } = useQuery({
+    queryKey: qk.companies.list({ search }),
+    queryFn: () => listCompanies(search || undefined),
+  });
 
-  useEffect(() => {
-    void fetchData();
-  }, [fetchData]);
+  const invalidate = () => qc.invalidateQueries({ queryKey: qk.companies.lists() });
 
-  const handleCreate = async () => {
-    const parsed = createCompanySchema.safeParse({ name: companyName });
-    if (!parsed.success) {
-      toast.error(parsed.error.issues[0]?.message ?? "Validation failed");
-      return;
-    }
-    try {
-      await createCompany(parsed.data.name);
+  // ── Mutations ──
+  // The companies tree (companies → SPs → HRs) is heavily nested, so each
+  // mutation just invalidates the list rather than reaching into the cache
+  // shape. The list refetch is fast enough that the user perceives it as
+  // instant; we still get the no-skeleton UX because background refetches
+  // keep the previous data visible.
+  const createCompanyMutation = useMutation({
+    mutationFn: (name: string) => createCompany(name),
+    onSuccess: () => {
       setShowCreate(false);
       setCompanyName("");
       toast.success("Company created");
-      void fetchData();
-    } catch {
-      toast.error("Failed to create company");
-    }
-  };
+      void invalidate();
+    },
+    onError: (err) => toastApiError(err, "Failed to create company"),
+  });
 
-  const handleDelete = async () => {
-    if (!deleteTarget) return;
-    try {
-      await deleteCompany(deleteTarget.id);
+  const deleteCompanyMutation = useMutation({
+    mutationFn: deleteCompany,
+    onMutate: async (id: string) => {
+      const key = qk.companies.list({ search });
+      await qc.cancelQueries({ queryKey: key });
+      const prev = qc.getQueryData<Company[]>(key);
+      qc.setQueryData<Company[]>(key, (old) => (old ?? []).filter((c) => c.id !== id));
+      return { prev, key };
+    },
+    onError: (err, _id, ctx) => {
+      if (ctx) qc.setQueryData(ctx.key, ctx.prev);
+      toastApiError(err, "Failed to delete");
+    },
+    onSuccess: () => {
       toast.success("Company deleted");
-      void fetchData();
-    } catch {
-      toast.error("Failed to delete");
-    }
-    setDeleteTarget(null);
-  };
+      setDeleteTarget(null);
+    },
+    onSettled: () => void invalidate(),
+  });
 
-  const handleAddSP = async () => {
-    if (!addSP) return;
-    try {
-      await createServiceProvider(spName, addSP);
+  const createSPMutation = useMutation({
+    mutationFn: ({ name, companyId }: { name: string; companyId: string }) =>
+      createServiceProvider(name, companyId),
+    onSuccess: () => {
       setAddSP(null);
       setSpName("");
       toast.success("Service Provider added");
-      void fetchData();
-    } catch {
-      toast.error("Failed to add");
-    }
-  };
+      void invalidate();
+    },
+    onError: (err) => toastApiError(err, "Failed to add"),
+  });
 
-  const handleAddHR = async () => {
-    if (!addHR) return;
-    try {
-      await createHRManager({
-        name: hrName,
-        companyId: addHR,
-        email: hrEmail || undefined,
-        phone: hrPhone || undefined,
-      });
+  const updateSPMutation = useMutation({
+    mutationFn: ({ id, name }: { id: string; name: string }) =>
+      updateServiceProvider(id, { name }),
+    onSuccess: () => {
+      setEditSP(null);
+      toast.success("Service Provider updated");
+      void invalidate();
+    },
+    onError: (err) => toastApiError(err, "Failed to update"),
+  });
+
+  const deleteSPMutation = useMutation({
+    mutationFn: deleteServiceProvider,
+    onSuccess: () => {
+      setDeleteSPTarget(null);
+      toast.success("Service Provider deleted");
+      void invalidate();
+    },
+    onError: (err) => toastApiError(err, "Failed to delete"),
+  });
+
+  const createHRMutation = useMutation({
+    mutationFn: createHRManager,
+    onSuccess: () => {
       setAddHR(null);
       setHrName("");
       setHrEmail("");
       setHrPhone("");
       toast.success("HR Manager added");
-      void fetchData();
-    } catch {
-      toast.error("Failed to add");
-    }
-  };
+      void invalidate();
+    },
+    onError: (err) => toastApiError(err, "Failed to add"),
+  });
 
-  const handleEditSP = async () => {
-    if (!editSP) return;
-    try {
-      await updateServiceProvider(editSP.id, { name: editSP.name });
-      setEditSP(null);
-      toast.success("Service Provider updated");
-      void fetchData();
-    } catch {
-      toast.error("Failed to update");
-    }
-  };
-
-  const handleDeleteSP = async () => {
-    if (!deleteSPTarget) return;
-    try {
-      await deleteServiceProvider(deleteSPTarget.id);
-      setDeleteSPTarget(null);
-      toast.success("Service Provider deleted");
-      void fetchData();
-    } catch {
-      toast.error("Failed to delete");
-    }
-  };
-
-  const handleEditHR = async () => {
-    if (!editHR) return;
-    try {
-      await updateHRManager(editHR.id, {
-        name: editHR.name,
-        email: editHR.email || undefined,
-        phone: editHR.phone || undefined,
-      });
+  const updateHRMutation = useMutation({
+    mutationFn: ({
+      id,
+      payload,
+    }: {
+      id: string;
+      payload: Parameters<typeof updateHRManager>[1];
+    }) => updateHRManager(id, payload),
+    onSuccess: () => {
       setEditHR(null);
       toast.success("HR Manager updated");
-      void fetchData();
-    } catch {
-      toast.error("Failed to update");
-    }
-  };
+      void invalidate();
+    },
+    onError: (err) => toastApiError(err, "Failed to update"),
+  });
 
-  const handleDeleteHR = async () => {
-    if (!deleteHRTarget) return;
-    try {
-      await deleteHRManager(deleteHRTarget.id);
+  const deleteHRMutation = useMutation({
+    mutationFn: deleteHRManager,
+    onSuccess: () => {
       setDeleteHRTarget(null);
       toast.success("HR Manager deleted");
-      void fetchData();
-    } catch {
-      toast.error("Failed to delete");
+      void invalidate();
+    },
+    onError: (err) => toastApiError(err, "Failed to delete"),
+  });
+
+  // ── Handler facades — UI components keep their existing call sites ──
+  const handleCreate = () => {
+    const parsed = createCompanySchema.safeParse({ name: companyName });
+    if (!parsed.success) {
+      toast.error(parsed.error.issues[0]?.message ?? "Validation failed");
+      return;
     }
+    createCompanyMutation.mutate(parsed.data.name);
+  };
+
+  const handleDelete = () => {
+    if (!deleteTarget) return;
+    deleteCompanyMutation.mutate(deleteTarget.id);
+  };
+
+  const handleAddSP = () => {
+    if (!addSP) return;
+    createSPMutation.mutate({ name: spName, companyId: addSP });
+  };
+
+  const handleAddHR = () => {
+    if (!addHR) return;
+    createHRMutation.mutate({
+      name: hrName,
+      companyId: addHR,
+      ...(hrEmail ? { email: hrEmail } : {}),
+      ...(hrPhone ? { phone: hrPhone } : {}),
+    });
+  };
+
+  const handleEditSP = () => {
+    if (!editSP) return;
+    updateSPMutation.mutate({ id: editSP.id, name: editSP.name });
+  };
+
+  const handleDeleteSP = () => {
+    if (!deleteSPTarget) return;
+    deleteSPMutation.mutate(deleteSPTarget.id);
+  };
+
+  const handleEditHR = () => {
+    if (!editHR) return;
+    updateHRMutation.mutate({
+      id: editHR.id,
+      payload: {
+        name: editHR.name,
+        ...(editHR.email ? { email: editHR.email } : {}),
+        ...(editHR.phone ? { phone: editHR.phone } : {}),
+      },
+    });
+  };
+
+  const handleDeleteHR = () => {
+    if (!deleteHRTarget) return;
+    deleteHRMutation.mutate(deleteHRTarget.id);
   };
 
   return (
@@ -201,7 +250,7 @@ export default function CompaniesPage() {
       <SearchInput
         value={search}
         onChange={setSearch}
-        onSearch={() => void fetchData()}
+        onSearch={() => void invalidate()}
         placeholder="Search companies..."
         historyKey="companies"
         suggestions

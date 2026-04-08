@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
 import {
   Download,
   Plus,
@@ -40,6 +42,10 @@ import type { Column } from "@/components/ui";
 import { listCompanies, type Company } from "@/services/company.service";
 import { listUsers } from "@/services/user.service";
 import { TimePicker } from "@/components/ui/time-picker";
+import { useTabSearchParam } from "@/hooks";
+
+const REPORTS_TAB_IDS = ["generate", "schedule", "history", "active"] as const;
+type ReportsTabId = (typeof REPORTS_TAB_IDS)[number];
 
 // ──────────────────────────────────────────────
 //  Reports Management — Spec Section 20
@@ -201,12 +207,12 @@ interface HistoryEntry {
 }
 
 export default function ReportsManagementPage() {
-  const [tab, setTab] = useState("generate");
+  const [tab, setTab] = useTabSearchParam<ReportsTabId>("tab", "generate", REPORTS_TAB_IDS);
 
   return (
     <div className="space-y-4">
       <PageHeader title="Reports Management" />
-      <Tabs tabs={TAB_ITEMS} activeTab={tab} onChange={setTab} />
+      <Tabs tabs={TAB_ITEMS} activeTab={tab} onChange={(id) => setTab(id as ReportsTabId)} />
       {tab === "generate" && <GenerateTab />}
       {tab === "schedule" && <ScheduleTab />}
       {tab === "history" && <HistoryTab />}
@@ -440,19 +446,21 @@ function filtersToApiParams(filters: ReportFilters): Record<string, string> {
 
 /** Shared hook to load companies + users for dropdowns */
 function useFilterData() {
-  const [companies, setCompanies] = useState<Company[]>([]);
-  const [allUsers, setAllUsers] = useState<
-    { id: string; firstName: string; lastName: string; role: string }[]
-  >([]);
-
-  useEffect(() => {
-    void listCompanies()
-      .then(setCompanies)
-      .catch(() => {});
-    void listUsers({ limit: "5000" })
-      .then((res) => setAllUsers(res.data))
-      .catch(() => {});
-  }, []);
+  const filterDataQuery = useQuery({
+    queryKey: qk.reportsManagement.filterData(),
+    queryFn: async () => {
+      const [cs, us] = await Promise.all([
+        listCompanies().catch(() => [] as Company[]),
+        listUsers({ limit: "5000" }).catch(
+          () => ({ data: [] as { id: string; firstName: string; lastName: string; role: string }[] }),
+        ),
+      ]);
+      return { companies: cs, allUsers: us.data };
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+  const companies = filterDataQuery.data?.companies ?? [];
+  const allUsers = useMemo(() => filterDataQuery.data?.allUsers ?? [], [filterDataQuery.data]);
 
   const recruiters = useMemo(
     () =>
@@ -530,8 +538,16 @@ function GenerateTab() {
 //  Tab 2: Schedule Email Reports — §20.3
 // ──────────────────────────────────────────────
 function ScheduleTab() {
-  const [schedules, setSchedules] = useState<Schedule[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const qc = useQueryClient();
+  const schedulesQuery = useQuery({
+    queryKey: qk.reportsManagement.schedules(),
+    queryFn: async () => {
+      const res = await api.get("/reports/schedules");
+      return res.data.data as Schedule[];
+    },
+  });
+  const schedules = schedulesQuery.data ?? [];
+  const isLoading = schedulesQuery.isLoading;
   const [showModal, setShowModal] = useState(false);
   const [editTarget, setEditTarget] = useState<Schedule | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Schedule | null>(null);
@@ -545,21 +561,16 @@ function ScheduleTab() {
   const [formRecipients, setFormRecipients] = useState("");
   const [formFilters, setFormFilters] = useState<ReportFilters>(EMPTY_FILTERS);
 
-  const fetchSchedules = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      const res = await api.get("/reports/schedules");
-      setSchedules(res.data.data);
-    } catch (err) {
-      toast.error(extractApiError(err).message);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
+  const fetchSchedules = useCallback(
+    () => qc.invalidateQueries({ queryKey: qk.reportsManagement.schedules() }),
+    [qc],
+  );
 
   useEffect(() => {
-    void fetchSchedules();
-  }, [fetchSchedules]);
+    if (schedulesQuery.isError) {
+      toast.error(extractApiError(schedulesQuery.error).message);
+    }
+  }, [schedulesQuery.isError, schedulesQuery.error]);
 
   const openCreate = () => {
     setEditTarget(null);
@@ -746,9 +757,9 @@ function ScheduleTab() {
         open={showModal}
         onClose={() => setShowModal(false)}
         title={editTarget ? "Edit Schedule" : "Create Schedule"}
-        size="lg"
+        size="full"
       >
-        <div className="max-h-[70vh] space-y-4 overflow-y-auto pr-1">
+        <div className="space-y-4">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <FormField label="Report Type" required>
               <Select
@@ -833,12 +844,8 @@ function ScheduleTab() {
 //  Tab 3: Report History — §20.4
 // ──────────────────────────────────────────────
 function HistoryTab() {
-  const [entries, setEntries] = useState<HistoryEntry[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const [totalPages, setTotalPages] = useState(1);
-  const [total, setTotal] = useState(0);
   const [filterType, setFilterType] = useState("");
   const [filterSource, setFilterSource] = useState("");
   const [search, setSearch] = useState("");
@@ -847,9 +854,19 @@ function HistoryTab() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
 
-  const fetchHistory = useCallback(async () => {
-    setIsLoading(true);
-    try {
+  const historyQuery = useQuery({
+    queryKey: qk.reportsManagement.history({
+      page,
+      pageSize,
+      sortKey,
+      sortDir,
+      filterType,
+      filterSource,
+      search,
+      dateFrom,
+      dateTo,
+    }),
+    queryFn: async () => {
       const params: Record<string, string | number> = {
         page,
         limit: pageSize,
@@ -862,19 +879,24 @@ function HistoryTab() {
       if (dateFrom) params.dateFrom = dateFrom;
       if (dateTo) params.dateTo = dateTo;
       const res = await api.get("/reports/history", { params });
-      setEntries(res.data.data);
-      setTotalPages(res.data.pagination?.totalPages ?? 1);
-      setTotal(res.data.pagination?.total ?? res.data.data.length);
-    } catch (err) {
-      toast.error(extractApiError(err).message);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [page, pageSize, filterType, filterSource, search, sortKey, sortDir, dateFrom, dateTo]);
+      return {
+        entries: res.data.data as HistoryEntry[],
+        totalPages: (res.data.pagination?.totalPages ?? 1) as number,
+        total: (res.data.pagination?.total ?? res.data.data.length) as number,
+      };
+    },
+    placeholderData: keepPreviousData,
+  });
+  const entries = historyQuery.data?.entries ?? [];
+  const totalPages = historyQuery.data?.totalPages ?? 1;
+  const total = historyQuery.data?.total ?? 0;
+  const isLoading = historyQuery.isLoading;
 
   useEffect(() => {
-    void fetchHistory();
-  }, [fetchHistory]);
+    if (historyQuery.isError) {
+      toast.error(extractApiError(historyQuery.error).message);
+    }
+  }, [historyQuery.isError, historyQuery.error]);
 
   const handleSort = useCallback(
     (key: string | null, dir: "asc" | "desc" | null) => {
@@ -1062,8 +1084,16 @@ function HistoryTab() {
 //  Tab 4: Active Scheduled Reports Info — §20.5
 // ──────────────────────────────────────────────
 function ActiveTab() {
-  const [schedules, setSchedules] = useState<Schedule[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const qc = useQueryClient();
+  const schedulesQuery = useQuery({
+    queryKey: qk.reportsManagement.schedules(),
+    queryFn: async () => {
+      const res = await api.get("/reports/schedules");
+      return res.data.data as Schedule[];
+    },
+  });
+  const schedules = schedulesQuery.data ?? [];
+  const isLoading = schedulesQuery.isLoading;
   const [editTarget, setEditTarget] = useState<Schedule | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Schedule | null>(null);
   const { companies, recruiters, employees } = useFilterData();
@@ -1077,21 +1107,16 @@ function ActiveTab() {
   const [formFilters, setFormFilters] = useState<ReportFilters>(EMPTY_FILTERS);
 
   // §20.5 — Fetch ALL schedules (active + paused), not just active
-  const fetchSchedules = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      const res = await api.get("/reports/schedules");
-      setSchedules(res.data.data);
-    } catch (err) {
-      toast.error(extractApiError(err).message);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
+  const fetchSchedules = useCallback(
+    () => qc.invalidateQueries({ queryKey: qk.reportsManagement.schedules() }),
+    [qc],
+  );
 
   useEffect(() => {
-    void fetchSchedules();
-  }, [fetchSchedules]);
+    if (schedulesQuery.isError) {
+      toast.error(extractApiError(schedulesQuery.error).message);
+    }
+  }, [schedulesQuery.isError, schedulesQuery.error]);
 
   const togglePause = async (s: Schedule) => {
     try {
@@ -1257,9 +1282,9 @@ function ActiveTab() {
         open={!!editTarget}
         onClose={() => setEditTarget(null)}
         title="Edit Schedule"
-        size="lg"
+        size="full"
       >
-        <div className="max-h-[70vh] space-y-4 overflow-y-auto pr-1">
+        <div className="space-y-4">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <FormField label="Report Type">
               <Select

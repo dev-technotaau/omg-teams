@@ -1,13 +1,14 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { useQuery, keepPreviousData } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
 import Link from "next/link";
 import { Plus, Download } from "lucide-react";
 import { useAuth } from "@/contexts/auth";
 import {
   listCandidates,
   type CandidateReport,
-  type PaginatedResponse,
 } from "@/services/candidate.service";
 import { exportToXLSX } from "@/utils/export-table";
 import {
@@ -39,8 +40,6 @@ const statusOptions = [
 
 export default function ReportsPage() {
   const { user } = useAuth();
-  const [data, setData] = useState<PaginatedResponse<CandidateReport> | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState("");
@@ -53,25 +52,18 @@ export default function ReportsPage() {
     }
   }, [user]);
 
-  const fetchData = useCallback(async () => {
-    setIsLoading(true);
-    try {
+  const reportsQuery = useQuery({
+    queryKey: qk.reports.list({ page, search, statusFilter }),
+    queryFn: () => {
       const params: Record<string, string> = { page: String(page), limit: String(PAGE_SIZE) };
       if (search) params["search"] = search;
       if (statusFilter) params["status"] = statusFilter;
-      const result = await listCandidates(params);
-      setData(result);
-    } catch {
-      // Error handled by API interceptor
-    } finally {
-      setIsLoading(false);
-    }
-  }, [page, search, statusFilter]);
-
-  useEffect(() => {
-    void fetchData();
-  }, [fetchData]);
-
+      return listCandidates(params);
+    },
+    placeholderData: keepPreviousData,
+  });
+  const data = reportsQuery.data ?? null;
+  const isLoading = reportsQuery.isLoading;
   const isRecruiter = user?.role === ROLES.RECRUITER;
 
   const columns = useMemo<Column<CandidateReport>[]>(

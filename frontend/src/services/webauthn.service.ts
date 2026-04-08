@@ -76,10 +76,17 @@ export async function loginWithPasskey(
   response: Record<string, unknown>,
   challengeId: string,
   deviceId: string,
+  /** Admin session-conflict bypass — see backend auth.service.ts LoginInput */
+  confirmReplaceSession?: boolean,
 ) {
   const res = await axios.post<{ user: { role: string }; sessionId: string }>(
     "/api/auth/webauthn-login",
-    { response, challengeId, deviceId },
+    {
+      response,
+      challengeId,
+      deviceId,
+      ...(confirmReplaceSession === true && { confirmReplaceSession: true }),
+    },
   );
   return res.data;
 }

@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
 import DOMPurify from "isomorphic-dompurify";
 import { Mail, Copy, Eye, RotateCcw, Save } from "lucide-react";
 import { toast } from "sonner";
@@ -37,30 +39,24 @@ interface TemplateDetail extends EmailTemplate {
 }
 
 export default function EmailTemplatesPage() {
-  const [templates, setTemplates] = useState<EmailTemplate[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const qc = useQueryClient();
+  const templatesQuery = useQuery({
+    queryKey: qk.emailTemplates.list(),
+    queryFn: listTemplates,
+  });
+  const templates = templatesQuery.data ?? [];
+  const isLoading = templatesQuery.isLoading;
+  const fetchTemplates = useCallback(
+    () => qc.invalidateQueries({ queryKey: qk.emailTemplates.all() }),
+    [qc],
+  );
+
   const [selected, setSelected] = useState<TemplateDetail | null>(null);
   const [editSubject, setEditSubject] = useState("");
   const [editBody, setEditBody] = useState("");
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
-
-  const fetchTemplates = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      const data = await listTemplates();
-      setTemplates(data);
-    } catch (err) {
-      toast.error(extractApiError(err).message);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void fetchTemplates();
-  }, [fetchTemplates]);
 
   const openEditor = async (key: string) => {
     try {

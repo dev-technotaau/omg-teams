@@ -16,3 +16,4 @@ export { usePresence, getPresenceDotClass } from "./use-presence";
 export type { PresenceStatus } from "./use-presence";
 export { useFilterPresets } from "./use-filter-presets";
 export type { FilterPreset } from "./use-filter-presets";
+export { useTabSearchParam } from "./use-tab-search-param";

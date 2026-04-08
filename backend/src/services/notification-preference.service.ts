@@ -174,6 +174,10 @@ export async function shouldSendEmail(
   userId: string,
   category: NotificationCategory,
 ): Promise<boolean> {
+  // Platform-wide kill switch (admin Settings → Notifications → Email)
+  const { getSettingBool } = await import("./settings.service.js");
+  if (!(await getSettingBool("notification_email_enabled", true))) return false;
+
   const prisma = getPrisma();
   const pref = await prisma.notificationPreference.findUnique({
     where: { userId_category: { userId, category } },

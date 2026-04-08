@@ -129,7 +129,7 @@ export function Drawer({
           <button
             type="button"
             onClick={onClose}
-            className="text-text-muted hover:bg-bg-hover hover:text-text-primary focus:ring-border-focus ml-auto shrink-0 rounded-md p-1 focus:ring-2 focus:outline-hidden"
+            className="text-text-muted hover:bg-bg-hover hover:text-text-primary focus-visible:ring-border-focus ml-auto shrink-0 rounded-md p-1 focus:outline-hidden focus-visible:ring-2"
             aria-label="Close drawer"
           >
             <X size={20} />

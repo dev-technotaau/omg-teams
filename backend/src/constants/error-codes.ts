@@ -15,6 +15,14 @@ export const ErrorCode = {
   OTP_EXPIRED: "OTP_EXPIRED",
   CSRF_MISSING: "CSRF_MISSING",
   CSRF_INVALID: "CSRF_INVALID",
+  /**
+   * Admin already has an active session on another device. Returned with
+   * HTTP 409 — the client should show a "logout other device?" confirmation
+   * dialog and re-submit the login with `confirmReplaceSession: true` to
+   * proceed (which will atomically destroy the old session via createSession's
+   * single-session enforcement).
+   */
+  SESSION_EXISTS: "SESSION_EXISTS",
 
   // ── Authorization ──
   FORBIDDEN: "FORBIDDEN",
@@ -25,6 +33,12 @@ export const ErrorCode = {
   VALIDATION_ERROR: "VALIDATION_ERROR",
   INVALID_INPUT: "INVALID_INPUT",
   DUPLICATE_ENTRY: "DUPLICATE_ENTRY",
+  INVALID_DATE: "INVALID_DATE",
+  INVALID_DATE_RANGE: "INVALID_DATE_RANGE",
+
+  // ── Targets (§23.9) ──
+  TARGET_OVERLAP: "TARGET_OVERLAP",
+  TARGET_NOT_FOUND: "TARGET_NOT_FOUND",
 
   // ── Resources ──
   NOT_FOUND: "NOT_FOUND",

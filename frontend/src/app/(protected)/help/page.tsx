@@ -18,7 +18,7 @@ interface FAQSection {
 const FAQ_DATA: FAQSection[] = [
   {
     title: "Recruiter FAQs",
-    roles: ["RECRUITER", "REPORTING_MANAGER", "ADMIN"],
+    roles: ["RECRUITER"],
     items: [
       {
         q: "How do I submit a daily candidate report?",
@@ -56,7 +56,7 @@ const FAQ_DATA: FAQSection[] = [
   },
   {
     title: "Reporting Manager FAQs",
-    roles: ["REPORTING_MANAGER", "ADMIN"],
+    roles: ["REPORTING_MANAGER"],
     items: [
       {
         q: "How do I review and approve reports?",
@@ -187,7 +187,7 @@ export default function HelpPage() {
                   </Badge>
                 </div>
 
-                <div className="space-y-1">
+                <div className="space-y-2">
                   {section.items.map((item, idx) => {
                     const key = `${section.title}-${idx}`;
                     const isOpen = !!expanded[key];

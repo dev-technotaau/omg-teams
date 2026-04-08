@@ -1,6 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
 import {
   Plus,
   UserX,
@@ -17,6 +20,7 @@ import {
   CheckCircle,
   XCircle,
   Link2,
+  Link2Off,
   Mail,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -33,9 +37,12 @@ import {
   reactivateWithDeviceReset,
   generateBackupCodes,
   unlockAccount,
+  assignManager as assignManagerApi,
+  removeManager as removeManagerApi,
   type PaginatedUsers,
   type DeviceInfo,
 } from "@/services/user.service";
+import { api } from "@/lib/api";
 import {
   PageHeader,
   SearchInput,
@@ -73,8 +80,7 @@ import { createUserSchema } from "@/validators/user";
 type User = PaginatedUsers["data"][number];
 
 export default function UserManagementPage() {
-  const [data, setData] = useState<PaginatedUsers | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const qc = useQueryClient();
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState("");
   const [statusQuickFilter, setStatusQuickFilter] = useState("");
@@ -85,6 +91,8 @@ export default function UserManagementPage() {
   const [viewType, setViewType] = useState<ViewType>("table");
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [rmOptions, setRmOptions] = useState<{ value: string; label: string }[]>([]);
+  const [recruiterOptions, setRecruiterOptions] = useState<{ value: string; label: string }[]>([]);
+  const [createRole, setCreateRole] = useState<"" | "RECRUITER" | "REPORTING_MANAGER">("");
   const [createdUser, setCreatedUser] = useState<{
     employeeId: string;
     plainPassword: string;
@@ -93,12 +101,110 @@ export default function UserManagementPage() {
     email: string;
     role: string;
     assignedManagers?: string[];
+    assignedRecruiters?: string[];
   } | null>(null);
   const [confirmAction, setConfirmAction] = useState<{
     type: string;
     userId: string;
     userName: string;
   } | null>(null);
+
+  // §Godview — row-level assign/remove manager/recruiter modal
+  type AssignmentMode =
+    | "assign-manager"
+    | "remove-manager"
+    | "assign-recruiter"
+    | "remove-recruiter";
+  const [assignment, setAssignment] = useState<{
+    mode: AssignmentMode;
+    user: User;
+  } | null>(null);
+  const [assignmentOptions, setAssignmentOptions] = useState<
+    Array<{ id: string; firstName: string; lastName: string; employeeId: string | null }>
+  >([]);
+  const [assignmentLoading, setAssignmentLoading] = useState(false);
+  const [assignmentSelected, setAssignmentSelected] = useState("");
+  const [assignmentSaving, setAssignmentSaving] = useState(false);
+
+  const openAssignment = useCallback(async (mode: AssignmentMode, user: User) => {
+    setAssignment({ mode, user });
+    setAssignmentSelected("");
+    setAssignmentLoading(true);
+    try {
+      if (mode === "assign-manager" || mode === "assign-recruiter") {
+        const role = mode === "assign-manager" ? "REPORTING_MANAGER" : "RECRUITER";
+        const res = await api.get<{
+          data: Array<{
+            id: string;
+            firstName: string;
+            lastName: string;
+            employeeId: string | null;
+          }>;
+        }>(`/users?role=${role}&status=ACTIVE&limit=500`);
+        setAssignmentOptions(res.data.data ?? []);
+      } else {
+        const detail = await api.get<{
+          user: {
+            managers?: Array<{
+              manager: { id: string; firstName: string; lastName: string };
+            }>;
+            managedRecruiters?: Array<{
+              recruiter: { id: string; firstName: string; lastName: string };
+            }>;
+          };
+        }>(`/users/${user.id}`);
+        if (mode === "remove-manager") {
+          setAssignmentOptions(
+            (detail.data.user.managers ?? []).map((m) => ({
+              id: m.manager.id,
+              firstName: m.manager.firstName,
+              lastName: m.manager.lastName,
+              employeeId: null,
+            })),
+          );
+        } else {
+          setAssignmentOptions(
+            (detail.data.user.managedRecruiters ?? []).map((r) => ({
+              id: r.recruiter.id,
+              firstName: r.recruiter.firstName,
+              lastName: r.recruiter.lastName,
+              employeeId: null,
+            })),
+          );
+        }
+      }
+    } catch {
+      toast.error("Failed to load options");
+    } finally {
+      setAssignmentLoading(false);
+    }
+  }, []);
+
+  const submitAssignment = async () => {
+    if (!assignment || !assignmentSelected) return;
+    setAssignmentSaving(true);
+    try {
+      const { mode, user } = assignment;
+      if (mode === "assign-manager") {
+        await assignManagerApi(user.id, assignmentSelected);
+        toast.success("Manager assigned");
+      } else if (mode === "remove-manager") {
+        await removeManagerApi(user.id, assignmentSelected);
+        toast.success("Manager removed");
+      } else if (mode === "assign-recruiter") {
+        await assignManagerApi(assignmentSelected, user.id);
+        toast.success("Recruiter assigned");
+      } else {
+        await removeManagerApi(assignmentSelected, user.id);
+        toast.success("Recruiter removed");
+      }
+      setAssignment(null);
+    } catch {
+      toast.error("Failed to update assignment");
+    } finally {
+      setAssignmentSaving(false);
+    }
+  };
   const [pwVerifyTarget, setPwVerifyTarget] = useState<{
     userId: string;
     userName: string;
@@ -119,9 +225,20 @@ export default function UserManagementPage() {
     userName: string;
   } | null>(null);
 
-  const fetchUsers = useCallback(async () => {
-    setIsLoading(true);
-    try {
+  // Server state — paginated, filtered users list. Each filter combo
+  // caches independently via the query key; switching filters returns to
+  // cached data instantly with a background refetch.
+  const usersQuery = useQuery({
+    queryKey: qk.users.list({
+      page,
+      search,
+      role: roleFilter,
+      deviceStatus: deviceFilter,
+      status: statusQuickFilter,
+      sortKey,
+      sortDir,
+    }),
+    queryFn: () => {
       const params: Record<string, string> = {
         page: String(page),
         limit: String(DEFAULT_PAGE_SIZE),
@@ -134,25 +251,39 @@ export default function UserManagementPage() {
         params["sortBy"] = sortKey;
         params["sortDir"] = sortDir;
       }
-      setData(await listUsers(params));
-    } finally {
-      setIsLoading(false);
-    }
-  }, [page, search, roleFilter, deviceFilter, statusQuickFilter, sortKey, sortDir]);
+      return listUsers(params);
+    },
+    placeholderData: keepPreviousData,
+  });
+  const data = usersQuery.data ?? null;
+  const isLoading = usersQuery.isLoading;
 
-  useEffect(() => {
-    void fetchUsers();
-  }, [fetchUsers]);
+  // Compatibility facade — the existing handlers below call `void fetchUsers()`
+  // after mutations to refresh the list. We rewire that to invalidate so the
+  // call sites stay unchanged but we get React Query's no-flicker UX.
+  const fetchUsers = useCallback(
+    () => qc.invalidateQueries({ queryKey: qk.users.lists() }),
+    [qc],
+  );
 
-  // §6.3 — Fetch RMs for assignment dropdown during account creation
+  // §6.3 — Fetch RMs + Recruiters for assignment dropdowns during account creation
   useEffect(() => {
     void (async () => {
       try {
-        const res = await listUsers({ role: "REPORTING_MANAGER", status: "ACTIVE", limit: "200" });
+        const [rmRes, recRes] = await Promise.all([
+          listUsers({ role: "REPORTING_MANAGER", status: "ACTIVE", limit: "500" }),
+          listUsers({ role: "RECRUITER", status: "ACTIVE", limit: "500" }),
+        ]);
         setRmOptions(
-          (res.data ?? []).map((u) => ({
+          (rmRes.data ?? []).map((u) => ({
             value: u.id,
-            label: `${u.firstName} ${u.lastName}`,
+            label: `${u.firstName} ${u.lastName}${u.employeeId ? ` (${u.employeeId})` : ""}`,
+          })),
+        );
+        setRecruiterOptions(
+          (recRes.data ?? []).map((u) => ({
+            value: u.id,
+            label: `${u.firstName} ${u.lastName}${u.employeeId ? ` (${u.employeeId})` : ""}`,
           })),
         );
       } catch {
@@ -175,15 +306,24 @@ export default function UserManagementPage() {
         toast.error(parsed.error.issues[0]?.message ?? "Validation failed");
         return;
       }
-      // §6.3 — Collect selected RM IDs from multi-select
+      // §6.3 — Collect selected RM / Recruiter IDs from multi-selects
       const managerSelect = formData.getAll("managerIds") as string[];
       const managerIds = managerSelect.filter(Boolean);
+      const recruiterSelect = formData.getAll("recruiterIds") as string[];
+      const recruiterIds = recruiterSelect.filter(Boolean);
       const result = await createUser({
         ...parsed.data,
-        ...(managerIds.length > 0 && { managerIds }),
+        ...(raw.role === "RECRUITER" && managerIds.length > 0 && { managerIds }),
+        ...(raw.role === "REPORTING_MANAGER" && recruiterIds.length > 0 && { recruiterIds }),
       });
       setCreatedUser(result);
       setShowCreateModal(false);
+      // Clear all controlled state so the next "Create Account" opens with
+      // a blank form. Without resetting createPassword the previous user's
+      // password leaks into the next create modal (the firstName/lastName/
+      // email fields are uncontrolled FormData so they reset themselves).
+      setCreatePassword("");
+      setCreateRole("");
       toast.success("Account created");
       void fetchUsers();
     } catch {
@@ -548,6 +688,32 @@ export default function UserManagementPage() {
               }),
           });
 
+          // §Godview — Manager/Recruiter assignment actions
+          if (user.role === "RECRUITER") {
+            items.push({
+              label: "Assign Reporting Manager",
+              icon: Link2,
+              onClick: () => void openAssignment("assign-manager", user),
+            });
+            items.push({
+              label: "Remove Reporting Manager",
+              icon: Link2Off,
+              onClick: () => void openAssignment("remove-manager", user),
+            });
+          }
+          if (user.role === "REPORTING_MANAGER") {
+            items.push({
+              label: "Assign Recruiter",
+              icon: Link2,
+              onClick: () => void openAssignment("assign-recruiter", user),
+            });
+            items.push({
+              label: "Remove Recruiter",
+              icon: Link2Off,
+              onClick: () => void openAssignment("remove-recruiter", user),
+            });
+          }
+
           if (items.length === 0) return null;
 
           return (
@@ -569,7 +735,7 @@ export default function UserManagementPage() {
         },
       },
     ],
-    [],
+    [openAssignment],
   );
 
   const detailRendererFn = useCallback(
@@ -581,7 +747,9 @@ export default function UserManagementPage() {
             <p className="text-text-primary text-lg font-semibold">
               {user.firstName} {user.lastName}
             </p>
-            <p className="text-text-muted text-sm">{user.email}</p>
+            <p className="text-text-muted text-sm">
+              {user.employeeId ? `${user.employeeId} \u00B7 ${user.email}` : user.email}
+            </p>
           </div>
         </div>
         <div className="border-border-default divide-border-default divide-y rounded-lg border">
@@ -592,12 +760,18 @@ export default function UserManagementPage() {
             ["Device", user.deviceId ? "Bound" : "Unbound"],
             ["Created", new Date(user.createdAt).toLocaleDateString("en-IN")],
           ].map(([label, value]) => (
-            <div key={label} className="flex justify-between px-4 py-2.5 text-sm">
+            <div key={String(label)} className="flex justify-between px-4 py-2.5 text-sm">
               <span className="text-text-muted">{label}</span>
-              <span className="text-text-primary font-medium">{value}</span>
+              <span className="text-text-primary font-medium">{String(value)}</span>
             </div>
           ))}
         </div>
+        <Link
+          href={`/admin/employees/${user.id}`}
+          className="bg-primary-500 hover:bg-primary-600 block rounded-md px-4 py-2 text-center text-sm font-medium text-white"
+        >
+          View Full Profile
+        </Link>
       </div>
     ),
     [],
@@ -789,7 +963,7 @@ export default function UserManagementPage() {
         pinnedIds={pinnedIds}
         onPinChange={setPinnedIds}
         detailRenderer={detailRendererFn}
-        detailTitle={(u) => `${u.firstName} ${u.lastName}`}
+        detailTitle={() => "Quick View"}
         enableKeyboardNav
       />
 
@@ -799,6 +973,7 @@ export default function UserManagementPage() {
         onClose={() => {
           setShowCreateModal(false);
           setCreatePassword("");
+          setCreateRole("");
         }}
         title="Create Employee Account"
         size="md"
@@ -827,10 +1002,19 @@ export default function UserManagementPage() {
             <PasswordStrength password={createPassword} />
           </FormField>
           <FormField label="Role" htmlFor="role" required>
-            <Select id="role" name="role" options={ROLE_CREATE_OPTIONS} required />
+            <Select
+              id="role"
+              name="role"
+              options={ROLE_CREATE_OPTIONS}
+              value={createRole}
+              onChange={(e) =>
+                setCreateRole(e.target.value as "" | "RECRUITER" | "REPORTING_MANAGER")
+              }
+              required
+            />
           </FormField>
-          {/* §6.3 — Assign Reporting Manager(s) during creation */}
-          {rmOptions.length > 0 && (
+          {/* §6.3 — Assign Reporting Manager(s) when creating a Recruiter */}
+          {createRole === "RECRUITER" && rmOptions.length > 0 && (
             <FormField label="Assign Reporting Manager(s)" htmlFor="managerIds">
               <Select
                 id="managerIds"
@@ -840,7 +1024,22 @@ export default function UserManagementPage() {
                 placeholder="Select reporting managers..."
               />
               <p className="text-text-muted mt-1 text-xs">
-                Click to select multiple. Only applies to Recruiter role.
+                Click to select multiple. This recruiter will report to the selected RMs.
+              </p>
+            </FormField>
+          )}
+          {/* §6.3 — Assign Recruiter(s) when creating a Reporting Manager */}
+          {createRole === "REPORTING_MANAGER" && recruiterOptions.length > 0 && (
+            <FormField label="Assign Recruiter(s)" htmlFor="recruiterIds">
+              <Select
+                id="recruiterIds"
+                name="recruiterIds"
+                multiple
+                options={recruiterOptions}
+                placeholder="Select recruiters..."
+              />
+              <p className="text-text-muted mt-1 text-xs">
+                Click to select multiple. These recruiters will report to this RM.
               </p>
             </FormField>
           )}
@@ -885,6 +1084,9 @@ export default function UserManagementPage() {
                   `Password: ${createdUser.plainPassword}`,
                   createdUser.assignedManagers?.length
                     ? `Assigned RM(s): ${createdUser.assignedManagers.join(", ")}`
+                    : "",
+                  createdUser.assignedRecruiters?.length
+                    ? `Assigned Recruiter(s): ${createdUser.assignedRecruiters.join(", ")}`
                     : "",
                 ]
                   .filter(Boolean)
@@ -954,8 +1156,76 @@ export default function UserManagementPage() {
                 <strong>Assigned RM(s):</strong> {createdUser.assignedManagers.join(", ")}
               </p>
             )}
+            {createdUser.assignedRecruiters && createdUser.assignedRecruiters.length > 0 && (
+              <p>
+                <strong>Assigned Recruiter(s):</strong>{" "}
+                {createdUser.assignedRecruiters.join(", ")}
+              </p>
+            )}
           </div>
         )}
+      </Modal>
+
+      {/* §Godview — Assign/Remove manager/recruiter modal */}
+      <Modal
+        open={assignment !== null}
+        onClose={() => setAssignment(null)}
+        title={
+          assignment?.mode === "assign-manager"
+            ? `Assign Reporting Manager to ${assignment.user.firstName} ${assignment.user.lastName}`
+            : assignment?.mode === "remove-manager"
+              ? `Remove Reporting Manager from ${assignment.user.firstName} ${assignment.user.lastName}`
+              : assignment?.mode === "assign-recruiter"
+                ? `Assign Recruiter to ${assignment.user.firstName} ${assignment.user.lastName}`
+                : assignment?.mode === "remove-recruiter"
+                  ? `Remove Recruiter from ${assignment.user.firstName} ${assignment.user.lastName}`
+                  : ""
+        }
+        size="sm"
+      >
+        <div className="space-y-3">
+          {assignmentLoading ? (
+            <p className="text-text-muted text-sm">Loading options…</p>
+          ) : assignmentOptions.length === 0 ? (
+            <p className="text-text-muted text-sm">
+              {assignment?.mode.startsWith("remove")
+                ? "No current assignments to remove."
+                : "No eligible users available."}
+            </p>
+          ) : (
+            <FormField
+              label={
+                assignment?.mode.includes("manager") ? "Reporting Manager" : "Recruiter"
+              }
+              htmlFor="users-row-assignment-select"
+              required
+            >
+              <Select
+                id="users-row-assignment-select"
+                value={assignmentSelected}
+                onChange={(e) => setAssignmentSelected(e.target.value)}
+                options={[
+                  { value: "", label: "— Select —" },
+                  ...assignmentOptions.map((u) => ({
+                    value: u.id,
+                    label: `${u.firstName} ${u.lastName}${u.employeeId ? ` (${u.employeeId})` : ""}`,
+                  })),
+                ]}
+              />
+            </FormField>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setAssignment(null)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void submitAssignment()}
+              disabled={!assignmentSelected || assignmentLoading || assignmentSaving}
+            >
+              {assignmentSaving ? "Saving…" : "Confirm"}
+            </Button>
+          </div>
+        </div>
       </Modal>
 
       {/* Confirm Dialog */}
@@ -1092,7 +1362,7 @@ export default function UserManagementPage() {
         {deviceInfoLoading ? (
           <div className="text-text-muted py-8 text-center text-sm">Loading device info...</div>
         ) : deviceInfo ? (
-          <div className="max-h-[70vh] space-y-5 overflow-y-auto pr-1">
+          <div className="space-y-5">
             {/* Current Device Binding */}
             <div className="border-border-default rounded-lg border p-4">
               <h4 className="text-text-primary mb-2 text-sm font-semibold">

@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
+import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
 import {
   Pencil,
   Download,
@@ -74,8 +76,7 @@ function formatMinutes(mins: number | null): string {
 }
 
 export default function AdminAttendancePage() {
-  const [data, setData] = useState<PaginatedResponse<AttendanceRecord> | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const qc = useQueryClient();
   const [dateFilter, setDateFilter] = useState(todayISO());
   const [statusFilter, setStatusFilter] = useState("");
   const [roleFilter, setRoleFilter] = useState("");
@@ -90,9 +91,10 @@ export default function AdminAttendancePage() {
   const [editRemarks, setEditRemarks] = useState("");
   const [isSaving, setIsSaving] = useState(false);
 
-  const fetchData = useCallback(async () => {
-    setIsLoading(true);
-    try {
+  // Server state — paginated, filtered attendance.
+  const attendanceQuery = useQuery({
+    queryKey: qk.attendance.list({ page, dateFilter, statusFilter }),
+    queryFn: async () => {
       const params: Record<string, string> = {
         page: String(page),
         limit: String(DEFAULT_LARGE_PAGE_SIZE),
@@ -100,15 +102,17 @@ export default function AdminAttendancePage() {
       };
       if (statusFilter) params.status = statusFilter;
       const res = await api.get<PaginatedResponse<AttendanceRecord>>("/attendance", { params });
-      setData(res.data);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [page, dateFilter, statusFilter]);
+      return res.data;
+    },
+    placeholderData: keepPreviousData,
+  });
+  const data = attendanceQuery.data ?? null;
+  const isLoading = attendanceQuery.isLoading;
 
-  useEffect(() => {
-    void fetchData();
-  }, [fetchData]);
+  const fetchData = useCallback(
+    () => qc.invalidateQueries({ queryKey: qk.attendance.lists() }),
+    [qc],
+  );
 
   const openEdit = (record: AttendanceRecord) => {
     setEditTarget(record);
@@ -276,38 +280,39 @@ export default function AdminAttendancePage() {
         </Card>
       </div>
 
-      {/* Quick Filters */}
-      <div className="flex flex-wrap items-center gap-2">
-        {QUICK_FILTERS.map((qf) => (
-          <button
-            key={qf}
-            onClick={() => {
-              setDateFilter(getQuickFilterDate(qf));
+      {/* Filters — quick range group + date + status/role + search, one row */}
+      <div className="flex flex-wrap items-center gap-3">
+        {/* Grouped quick range + custom date picker */}
+        <div className="border-border-default bg-bg-surface flex flex-wrap items-center gap-1 rounded-md border p-1">
+          {QUICK_FILTERS.map((qf) => (
+            <button
+              key={qf}
+              onClick={() => {
+                setDateFilter(getQuickFilterDate(qf));
+                setPage(1);
+              }}
+              className={cn(
+                "rounded px-3 py-1.5 text-xs font-medium transition-colors",
+                dateFilter === getQuickFilterDate(qf)
+                  ? "bg-primary-500 text-white"
+                  : "text-text-secondary hover:bg-bg-hover",
+              )}
+            >
+              {qf}
+            </button>
+          ))}
+          <div className="bg-border-default mx-1 h-6 w-px" aria-hidden="true" />
+          <CalendarDatePicker
+            value={dateFilter}
+            onChange={(val) => {
+              setDateFilter(val);
               setPage(1);
             }}
-            className={cn(
-              "rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
-              dateFilter === getQuickFilterDate(qf)
-                ? "bg-primary-500 text-white"
-                : "bg-bg-muted text-text-secondary hover:bg-bg-hover",
-            )}
-          >
-            {qf}
-          </button>
-        ))}
-      </div>
-
-      {/* Filters */}
-      <div className="flex flex-wrap items-center gap-3">
-        <CalendarDatePicker
-          value={dateFilter}
-          onChange={(val) => {
-            setDateFilter(val);
-            setPage(1);
-          }}
-          showPresets
-          size="md"
-        />
+            showPresets
+            size="sm"
+            className="w-40"
+          />
+        </div>
         <Select
           value={statusFilter}
           onChange={(e) => {

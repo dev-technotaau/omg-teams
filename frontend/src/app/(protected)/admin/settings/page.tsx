@@ -6,15 +6,15 @@ import {
   Settings,
   AlertTriangle,
   Power,
-  Flag,
   FileSignature,
   Upload,
   Trash2,
 } from "lucide-react";
 import Image from "next/image";
 import { toast } from "sonner";
+import { useQuery } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
 import { api, extractApiError } from "@/lib/api";
-import { getAllFlags } from "@/services/feature-flag.service";
 import { uploadSignatureImage, deleteSignatureImage } from "@/services/upload.service";
 import { settingValueSchema } from "@/validators/settings";
 import type { SettingItem, SettingFieldDef } from "@/types/setting";
@@ -37,60 +37,19 @@ import { TimePicker } from "@/components/ui/time-picker";
 // ──────────────────────────────────────────────
 
 const CATEGORIES = [
-  { key: "general", label: "General" },
   { key: "maintenance", label: "Maintenance" },
-  { key: "session", label: "Session & Security" },
   { key: "attendance", label: "Attendance" },
   { key: "leave", label: "Leave" },
   { key: "reports", label: "Reports" },
   { key: "invoice", label: "Invoice" },
   { key: "data", label: "Data Management" },
-  { key: "zone", label: "Zone Configuration" },
   { key: "notification", label: "Notifications" },
   { key: "offer_letter", label: "Offer Letter" },
-  { key: "feature-flags", label: "Feature Flags" },
 ] as const;
 
 type FieldDef = SettingFieldDef;
 
 const FIELD_DEFS: FieldDef[] = [
-  // General
-  {
-    key: "platform_name",
-    label: "Platform Name",
-    description: "The display name for this platform",
-    type: "text",
-    category: "general",
-  },
-  // Session & Security
-  {
-    key: "idle_timeout_minutes",
-    label: "Idle Timeout (minutes)",
-    description: "Auto-logout after inactivity",
-    type: "number",
-    category: "session",
-  },
-  {
-    key: "lockout_threshold",
-    label: "Lockout Threshold",
-    description: "Failed login attempts before lockout",
-    type: "number",
-    category: "session",
-  },
-  {
-    key: "lockout_duration_minutes",
-    label: "Lockout Duration (minutes)",
-    description: "How long accounts stay locked",
-    type: "number",
-    category: "session",
-  },
-  {
-    key: "password_min_length",
-    label: "Password Min Length",
-    description: "Minimum characters for passwords",
-    type: "number",
-    category: "session",
-  },
   // Attendance
   {
     key: "expected_login_time",
@@ -103,13 +62,6 @@ const FIELD_DEFS: FieldDef[] = [
     key: "grace_period_minutes",
     label: "Grace Period (minutes)",
     description: "Minutes after expected time before marked late",
-    type: "number",
-    category: "attendance",
-  },
-  {
-    key: "absent_threshold_minutes",
-    label: "Absent Threshold (minutes)",
-    description: "Minutes late before marked absent",
     type: "number",
     category: "attendance",
   },
@@ -151,34 +103,6 @@ const FIELD_DEFS: FieldDef[] = [
   },
   // Leave
   {
-    key: "leave_casual_default",
-    label: "Casual Leave Allotment",
-    description: "Default annual casual leaves",
-    type: "number",
-    category: "leave",
-  },
-  {
-    key: "leave_sick_default",
-    label: "Sick Leave Allotment",
-    description: "Default annual sick leaves",
-    type: "number",
-    category: "leave",
-  },
-  {
-    key: "leave_earned_default",
-    label: "Earned Leave Allotment",
-    description: "Default annual earned leaves",
-    type: "number",
-    category: "leave",
-  },
-  {
-    key: "leave_carry_forward",
-    label: "Carry Forward",
-    description: "Allow unused leaves to carry over to next year",
-    type: "toggle",
-    category: "leave",
-  },
-  {
     key: "leave_negative_balance",
     label: "Negative Balance",
     description: "Allow leave applications beyond balance",
@@ -190,27 +114,6 @@ const FIELD_DEFS: FieldDef[] = [
     label: "Low Balance Warning (days)",
     description: "Notify employee when balance drops below this",
     type: "number",
-    category: "leave",
-  },
-  {
-    key: "leave_carry_forward_casual_max",
-    label: "Carry Forward CL Max (days)",
-    description: "Max casual leave days carried to next year (0 = none)",
-    type: "number",
-    category: "leave",
-  },
-  {
-    key: "leave_carry_forward_earned_max",
-    label: "Carry Forward EL Max (days)",
-    description: "Max earned leave days carried to next year (0 = none)",
-    type: "number",
-    category: "leave",
-  },
-  {
-    key: "leave_year_reset_date",
-    label: "Annual Reset Date",
-    description: "Date when balances reset yearly (e.g. 01-01 for Jan 1)",
-    type: "text",
     category: "leave",
   },
   // Reports
@@ -270,28 +173,6 @@ const FIELD_DEFS: FieldDef[] = [
     type: "number",
     category: "data",
   },
-  // §23.12 — Zone Configuration
-  {
-    key: "zone_set_a",
-    label: "Zone Set A",
-    description: "Comma-separated zones in Set A (e.g. WEST,CENTRAL)",
-    type: "text",
-    category: "zone",
-  },
-  {
-    key: "zone_set_b",
-    label: "Zone Set B",
-    description: "Comma-separated zones in Set B (e.g. EAST,NORTH,SOUTH)",
-    type: "text",
-    category: "zone",
-  },
-  {
-    key: "zone_enabled",
-    label: "Zone System Enabled",
-    description: "Enable/disable zone-based form sets",
-    type: "toggle",
-    category: "zone",
-  },
   // §23.12 — Notifications
   {
     key: "notification_admin_emails",
@@ -343,11 +224,7 @@ export default function SettingsPage() {
   const [dirtyKeys, setDirtyKeys] = useState<Set<string>>(new Set());
   const [isLoading, setIsLoading] = useState(true);
   const [savingCategory, setSavingCategory] = useState<string | null>(null);
-  const [activeCategory, setActiveCategory] = useState("general");
-
-  // Feature flags state
-  const [featureFlags, setFeatureFlags] = useState<Record<string, unknown>>({});
-  const [flagsLoading, setFlagsLoading] = useState(false);
+  const [activeCategory, setActiveCategory] = useState("maintenance");
 
   // Signature image state
   const [signatureUrl, setSignatureUrl] = useState<string | null>(null);
@@ -460,37 +337,33 @@ export default function SettingsPage() {
     }
   };
 
-  const fetchSettings = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      const res = await api.get<{ data: SettingItem[] }>("/settings");
+  // Server state — settings list. Sync into the existing local state map
+  // so the rest of the page (which mutates `settings` directly via
+  // updateLocal) keeps working unchanged.
+  const settingsQuery = useQuery({
+    queryKey: qk.settings.platform(),
+    queryFn: async () => {
+      const res = await api.get<{ settings: SettingItem[] }>("/settings");
+      return res.data.settings;
+    },
+  });
+  useEffect(() => {
+    if (settingsQuery.data) {
       const map: Record<string, string> = {};
-      for (const s of res.data.data) map[s.key] = s.value;
+      for (const s of settingsQuery.data) map[s.key] = s.value;
       setSettings(map);
       setDirtyKeys(new Set());
-      // Extract signature URL for preview
       setSignatureUrl(map["offer_letter_signature_url"] || null);
-    } catch (err) {
-      toast.error(extractApiError(err).message);
-    } finally {
       setIsLoading(false);
     }
-  }, []);
+    if (settingsQuery.isError) {
+      toast.error(extractApiError(settingsQuery.error).message);
+    }
+  }, [settingsQuery.data, settingsQuery.isError, settingsQuery.error]);
 
   useEffect(() => {
-    void fetchSettings();
     void fetchMaintenanceStatus();
-  }, [fetchSettings, fetchMaintenanceStatus]);
-
-  // Fetch feature flags when that tab is selected
-  useEffect(() => {
-    if (activeCategory !== "feature-flags") return;
-    setFlagsLoading(true);
-    void getAllFlags()
-      .then(setFeatureFlags)
-      .catch(() => toast.error("Failed to load feature flags"))
-      .finally(() => setFlagsLoading(false));
-  }, [activeCategory]);
+  }, [fetchMaintenanceStatus]);
 
   const updateLocal = (key: string, value: string) => {
     setSettings((prev) => ({ ...prev, [key]: value }));
@@ -540,7 +413,7 @@ export default function SettingsPage() {
       ) : (
         <div className="flex gap-6">
           {/* Category tabs (sidebar) */}
-          <nav className="w-48 shrink-0 space-y-1">
+          <nav className="w-48 shrink-0 space-y-2">
             {CATEGORIES.map((cat) => (
               <Button
                 key={cat.key}
@@ -809,60 +682,8 @@ export default function SettingsPage() {
             </Card>
           )}
 
-          {/* Feature Flags panel */}
-          {activeCategory === "feature-flags" && (
-            <Card padding="lg" className="flex-1">
-              <Card.Header>
-                <div className="flex items-center gap-2">
-                  <Flag size={18} className="text-primary-500" />
-                  <h2 className="text-text-primary text-lg font-semibold">Feature Flags</h2>
-                </div>
-                <p className="text-text-muted mt-1 text-sm">
-                  Read-only view of all feature flags. Flags are managed via Firebase Remote Config
-                  or platform settings.
-                </p>
-              </Card.Header>
-              <Card.Body>
-                {flagsLoading ? (
-                  <TableSkeleton rows={5} />
-                ) : Object.keys(featureFlags).length === 0 ? (
-                  <div className="text-text-muted flex items-center justify-center py-12 text-sm">
-                    <Flag size={16} className="mr-2" /> No feature flags configured
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {Object.entries(featureFlags).map(([key, value]) => (
-                      <div
-                        key={key}
-                        className="border-border-default flex items-center justify-between rounded-lg border px-4 py-3"
-                      >
-                        <div>
-                          <p className="text-text-primary font-mono text-sm font-medium">{key}</p>
-                        </div>
-                        <div>
-                          {typeof value === "boolean" ? (
-                            <span
-                              className={`rounded-full px-3 py-1 text-xs font-medium ${value ? "bg-success-100 text-success-700" : "bg-error-100 text-error-700"}`}
-                            >
-                              {value ? "Enabled" : "Disabled"}
-                            </span>
-                          ) : (
-                            <code className="bg-surface-secondary rounded px-2 py-1 text-xs">
-                              {JSON.stringify(value)}
-                            </code>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </Card.Body>
-            </Card>
-          )}
-
           {/* Settings form */}
           {activeCategory !== "maintenance" &&
-            activeCategory !== "feature-flags" &&
             activeCategory !== "offer_letter" && (
               <Card padding="lg" className="flex-1">
                 <Card.Header>

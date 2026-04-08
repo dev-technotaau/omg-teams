@@ -141,6 +141,8 @@ async function processScheduledReport(job: Job<ScheduledReportJob>): Promise<voi
   }
 
   // ── 4. Create GeneratedReport record ──
+  const { getSettingNumber } = await import("../services/settings.service.js");
+  const retentionDays = await getSettingNumber("report_retention_days", 30);
   const generatedReport = await prisma.generatedReport.create({
     data: {
       reportType: config.reportType,
@@ -150,7 +152,7 @@ async function processScheduledReport(job: Job<ScheduledReportJob>): Promise<voi
       fileSize,
       cloudUrl,
       cloudStorageKey,
-      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
+      expiresAt: new Date(Date.now() + retentionDays * 24 * 60 * 60 * 1000),
     },
   });
 

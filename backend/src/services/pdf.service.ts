@@ -17,7 +17,6 @@ import {
   renderWatermark,
   renderDecorativeCorners,
   renderHeader,
-  renderEmployeeDetails,
   renderSignatory,
   renderFooter,
   renderTemplateVariant,
@@ -113,7 +112,6 @@ export async function generateOfferLetterPdf(offerLetter: OfferLetterData): Prom
     renderWatermark(doc);
     renderDecorativeCorners(doc);
     renderHeader(doc, offerLetter.generatedAt, offerLetter.referenceNumber);
-    renderEmployeeDetails(doc, offerLetter.user);
 
     // ── Body — variant-specific ──
     // §29.4.2 — Replace {{placeholder}} tokens with dynamic field values in both variants

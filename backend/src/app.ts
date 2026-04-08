@@ -260,7 +260,7 @@ export function createApp(): express.Application {
   app.get("/health", (req: Request, res: Response) => {
     const status = serviceStatus.toJSON();
     const httpStatus = status.alive ? 200 : 503;
-    const accept = req.headers.accept || "";
+    const accept = req.headers.accept ?? "";
 
     // Return JSON for programmatic clients (curl, monitoring, etc.)
     if (accept.includes("application/json") || !accept.includes("text/html")) {

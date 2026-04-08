@@ -2,23 +2,20 @@ import { z } from "zod";
 import * as trashSvc from "../services/trash.service.js";
 import type { Request, Response } from "express";
 
-const entityTypeEnum = z.enum([
-  "candidateReport",
-  "company",
-  "serviceProvider",
-  "hRManager",
-  "user",
-]);
+const entityTypeEnum = z.enum(["candidate", "company", "serviceProvider", "hrManager", "user"]);
 
-/** GET /api/v1/trash — List trashed items */
+const listQuerySchema = z.object({
+  entityType: entityTypeEnum.optional(),
+  search: z.string().trim().min(1).optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(200).default(20),
+});
+
+/** GET /api/v1/trash — List trashed items (paginated, cross-entity) */
 export async function handleListTrash(req: Request, res: Response): Promise<void> {
-  const entityType = req.query["entityType"] as string | undefined;
-  const page = req.query["page"] ? parseInt(req.query["page"] as string, 10) : 1;
-  const limit = req.query["limit"] ? parseInt(req.query["limit"] as string, 10) : 20;
-
-  const parsed = entityType ? entityTypeEnum.parse(entityType) : undefined;
-  const items = await trashSvc.listTrash(parsed, page, limit);
-  res.status(200).json({ items });
+  const opts = listQuerySchema.parse(req.query);
+  const result = await trashSvc.listTrash(opts);
+  res.status(200).json(result);
 }
 
 /** POST /api/v1/trash/restore — Restore a trashed item */

@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
 import { Upload, CheckCircle, XCircle, Clock } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
@@ -23,29 +25,33 @@ const statusIcon = (status: string) => {
 };
 
 export default function MyDocumentsPage() {
-  const [documents, setDocuments] = useState<EmployeeDoc[]>([]);
-  const [docTypes, setDocTypes] = useState<DocType[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const qc = useQueryClient();
   const [uploadTarget, setUploadTarget] = useState<DocType | null>(null);
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
 
-  const fetchData = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      const [docsRes, typesRes] = await Promise.all([
-        api.get<{ documents: EmployeeDoc[] }>("/documents/my"),
-        api.get<{ types: DocType[] }>("/documents/types"),
-      ]);
-      setDocuments(docsRes.data.documents);
-      setDocTypes(typesRes.data.types);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
+  const docsQuery = useQuery({
+    queryKey: qk.documents.list({ scope: "my" }),
+    queryFn: async () => {
+      const r = await api.get<{ documents: EmployeeDoc[] }>("/documents/my");
+      return r.data.documents;
+    },
+  });
+  const typesQuery = useQuery({
+    queryKey: [...qk.documents.all(), "types"] as const,
+    queryFn: async () => {
+      const r = await api.get<{ types: DocType[] }>("/documents/types");
+      return r.data.types;
+    },
+    staleTime: 60 * 60 * 1000,
+  });
+  const documents = docsQuery.data ?? [];
+  const docTypes = typesQuery.data ?? [];
+  const isLoading = docsQuery.isLoading || typesQuery.isLoading;
 
-  useEffect(() => {
-    void fetchData();
-  }, [fetchData]);
+  const fetchData = useCallback(
+    () => qc.invalidateQueries({ queryKey: qk.documents.lists() }),
+    [qc],
+  );
 
   const verified = documents.filter((d) => d.status === "VERIFIED").length;
   const total = docTypes.filter((t) => t.isRequired).length;

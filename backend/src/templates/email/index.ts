@@ -35,6 +35,7 @@ export {
   accountReactivated,
   accountLockout,
   deviceLockBlocked,
+  systemAlert,
 } from "./auth.js";
 
 // Account Management (self-service + admin-initiated)

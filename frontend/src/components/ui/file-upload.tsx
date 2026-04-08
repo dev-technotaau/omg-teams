@@ -127,10 +127,20 @@ export function FileUpload({
           aria-hidden="true"
         />
         <p className="text-text-primary text-sm font-medium">{label}</p>
-        {description && <p className="text-text-muted mt-1 text-xs">{description}</p>}
-        {accept && <p className="text-text-muted mt-1 text-xs">Accepted: {accept}</p>}
-        {maxSize && (
-          <p className="text-text-muted mt-0.5 text-xs">Max size: {formatFileSize(maxSize)}</p>
+        {/* If the caller supplies a `description`, trust it to convey the
+            accept/maxSize constraints and suppress the auto-generated lines
+            (otherwise we end up showing the same info twice). */}
+        {description ? (
+          <p className="text-text-muted mt-1 text-xs">{description}</p>
+        ) : (
+          <>
+            {accept && <p className="text-text-muted mt-1 text-xs">Accepted: {accept}</p>}
+            {maxSize && (
+              <p className="text-text-muted mt-0.5 text-xs">
+                Max size: {formatFileSize(maxSize)}
+              </p>
+            )}
+          </>
         )}
       </div>
 

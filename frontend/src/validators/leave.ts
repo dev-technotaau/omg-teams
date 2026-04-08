@@ -11,6 +11,11 @@ export const leaveRequestSchema = z
     endDate: z.string().min(1, "End date is required"),
     isHalfDay: z.boolean().default(false),
     reason: z.string().min(10, "Reason must be at least 10 characters").max(500),
+    // Optional E.164 phone (e.g. "+919876543210"). Empty string → omitted.
+    emergencyContact: z
+      .string()
+      .optional()
+      .transform((v) => (v && v.trim() ? v.trim() : undefined)),
   })
   .refine((data) => new Date(data.endDate) >= new Date(data.startDate), {
     message: "End date must be after start date",

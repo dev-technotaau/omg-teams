@@ -49,7 +49,10 @@ export function NotificationItem({
       className={cn(
         "border-border-default hover:bg-bg-hover flex w-full flex-col gap-0.5 border-b px-4 text-left transition-colors",
         isCompact ? "py-3" : "py-4",
-        !n.isRead && "bg-primary-50",
+        // bg-bg-selected is the theme-aware "subtly tinted" background
+        // — light cream in light mode, dark amber-tinted in dark mode —
+        // so the title (text-text-primary) stays readable on both.
+        !n.isRead && "bg-bg-selected",
         onClick && "cursor-pointer",
       )}
     >

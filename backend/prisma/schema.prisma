@@ -260,6 +260,14 @@ model User {
   leaveBalanceChanges        LeaveBalanceHistory[]        @relation("BalanceChanger")
   leaveRecords               LeaveRecord[]                @relation("LeaveRecordUser")
   markedLeaveRecords         LeaveRecord[]                @relation("LeaveRecordMarker")
+  // §Godview — per-user administrative features
+  passwordHistory            PasswordHistory[]
+  webhookSubscriptions       WebhookSubscription[]        @relation("WebhookSubscriptionOwner")
+  tablePreferences           TablePreference[]
+  filterPresets              FilterPreset[]
+  impersonationsPerformed    ImpersonationSession[]       @relation("ImpersonationAdmin")
+  impersonationsReceived     ImpersonationSession[]       @relation("ImpersonationTarget")
+  archivedActions            ArchivedRecord[]             @relation("ArchivedRecordActor")
 
   @@index([role])
   @@index([status])
@@ -332,6 +340,10 @@ model LoginHistory {
   attemptedDeviceId String?   @map("attempted_device_id")
   ip              String?
   userAgent       String?     @map("user_agent")
+  /// Geolocation snapshot at login time — { country, city, region }.
+  /// Sourced from CF/proxy headers in auth.controller.ts. Used by
+  /// login-anomaly.service.ts for country baseline + velocity checks.
+  geoLocation     Json?       @map("geo_location")
   success         Boolean
   failureReason   String?     @map("failure_reason")
   loginMethod     LoginMethod @default(PASSWORD) @map("login_method")
@@ -341,6 +353,7 @@ model LoginHistory {
 
   @@index([userId])
   @@index([createdAt])
+  @@index([userId, success, createdAt])
   @@map("login_history")
 }
 
@@ -1149,9 +1162,16 @@ model ArchivedRecord {
   entityId   String   @map("entity_id")
   snapshot   Json     // Full row snapshot at time of archiving
   archivedAt DateTime @default(now()) @map("archived_at")
+  // §Godview — who archived it, so admin can filter per-user
+  actorId    String?  @map("actor_id")
+  relatedUserId String? @map("related_user_id") // subject of the archived record, if user-scoped
+
+  actor User? @relation("ArchivedRecordActor", fields: [actorId], references: [id], onDelete: SetNull)
 
   @@index([entityType])
   @@index([archivedAt])
+  @@index([actorId])
+  @@index([relatedUserId])
   @@map("archived_records")
 }
 
@@ -1172,21 +1192,38 @@ model PlatformSetting {
   @@map("platform_settings")
 }
 
-/// Admin-configurable dropdown values
+/// Admin-configurable dropdown values.
+///
+/// State and Location use two extra columns to model real geography:
+///   - STATE rows carry their geographic `zone` (NORTH/SOUTH/EAST/WEST/CENTRAL)
+///     so admin maps each state to a zone exactly once.
+///   - LOCATION rows reference their parent STATE row via `parentId`. The
+///     candidate form fetches all locations once and filters client-side
+///     by the user-selected state, so the cascading dropdown is implicit.
+///
+/// `zoneSet` is the legacy SET_A/SET_B column kept around for the candidate
+/// form's field-visibility logic only — it is NOT used to filter dropdowns.
 model DropdownOption {
   id        String            @id @default(cuid())
   category  DropdownCategory
   value     String
   label     String
   zoneSet   ZoneSet?          @map("zone_set")
+  zone      Zone?             // STATE rows only — geographic zone of the state
+  parentId  String?           @map("parent_id") // LOCATION rows only — parent STATE row
   sortOrder Int               @default(0) @map("sort_order")
   isActive  Boolean           @default(true) @map("is_active")
   createdAt DateTime          @default(now()) @map("created_at")
   updatedAt DateTime          @updatedAt @map("updated_at")
 
+  parent   DropdownOption?  @relation("DropdownChildren", fields: [parentId], references: [id], onDelete: SetNull)
+  children DropdownOption[] @relation("DropdownChildren")
+
   @@unique([category, value, zoneSet], map: "uq_dropdown_category_value_zoneset")
   @@index([category, isActive])
   @@index([category, zoneSet])
+  @@index([category, zone])
+  @@index([parentId])
   @@map("dropdown_options")
 }
 
@@ -1241,4 +1278,100 @@ model WebhookEndpoint {
 
   @@index([isActive])
   @@map("webhook_endpoints")
+}
+
+// ══════════════════════════════════════════════
+//  §Godview — Per-user administrative data
+// ══════════════════════════════════════════════
+
+/// Hash history so admins can audit rotations and block reuse
+model PasswordHistory {
+  id           String   @id @default(cuid())
+  userId       String   @map("user_id")
+  passwordHash String   @map("password_hash")
+  changedBy    String?  @map("changed_by") // null = self, otherwise admin user id
+  reason       String?  // e.g. "reset_by_admin", "self_change", "forced_rotation"
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("password_history")
+}
+
+/// Per-user webhook subscriptions (distinct from global WebhookEndpoint)
+model WebhookSubscription {
+  id          String   @id @default(cuid())
+  userId      String   @map("user_id")
+  url         String
+  secret      String
+  events      String[] @default([])
+  description String?
+  isActive    Boolean  @default(true) @map("is_active")
+  lastDeliveryAt DateTime? @map("last_delivery_at")
+  failureCount   Int       @default(0) @map("failure_count")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  user User @relation("WebhookSubscriptionOwner", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([isActive])
+  @@map("webhook_subscriptions")
+}
+
+/// Saved column visibility / density / page size per table per user
+model TablePreference {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  tableKey  String   @map("table_key") // e.g. "admin-employees"
+  columns   Json?    // { visible: [...], order: [...], pinned: [...] }
+  density   String?  // "compact" | "normal" | "spacious"
+  pageSize  Int?     @map("page_size")
+  viewType  String?  @map("view_type") // "table" | "card"
+  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, tableKey])
+  @@index([userId])
+  @@map("table_preferences")
+}
+
+/// Saved filter presets per page per user
+model FilterPreset {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  pageKey   String   @map("page_key")
+  name      String
+  filters   Json
+  isDefault Boolean  @default(false) @map("is_default")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, pageKey])
+  @@map("filter_presets")
+}
+
+/// Admin impersonation sessions for accountability
+model ImpersonationSession {
+  id            String    @id @default(cuid())
+  adminId       String    @map("admin_id")
+  targetUserId  String    @map("target_user_id")
+  reason        String
+  ipAddress     String?   @map("ip_address")
+  userAgent     String?   @map("user_agent")
+  startedAt     DateTime  @default(now()) @map("started_at")
+  endedAt       DateTime? @map("ended_at")
+
+  admin  User @relation("ImpersonationAdmin",  fields: [adminId],      references: [id], onDelete: Cascade)
+  target User @relation("ImpersonationTarget", fields: [targetUserId], references: [id], onDelete: Cascade)
+
+  @@index([adminId])
+  @@index([targetUserId])
+  @@index([startedAt])
+  @@map("impersonation_sessions")
 }

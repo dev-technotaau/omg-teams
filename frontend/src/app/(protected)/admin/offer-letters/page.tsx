@@ -1,6 +1,9 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { useMutation, useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
+import { toastApiError } from "@/lib/query-helpers";
 import Link from "next/link";
 import Image from "next/image";
 import DOMPurify from "isomorphic-dompurify";
@@ -36,12 +39,14 @@ import {
   Modal,
   FormField,
   Input,
-  SearchInput,
+  Select,
+  TimePicker,
   DataTable,
   IconButton,
   ConfirmDialog,
   Tooltip,
 } from "@/components/ui";
+import { CalendarDatePicker } from "@/components/ui/calendar-date-picker";
 import type { Column, ViewType, RowDensity } from "@/components/ui";
 import { TiptapEditor } from "@/components/tiptap-editor";
 import { cn } from "@/lib/utils";
@@ -51,12 +56,169 @@ import { pluralize } from "@/utils/format";
 //  Admin Offer Letters — Spec Section 29.4
 // ──────────────────────────────────────────────
 
+// §29.4 — Work mode codes. The same value is sent to the backend, which
+// renders the long form next to the position title and the short code in
+// section 3 of the offer letter.
+const WORK_MODE_OPTIONS = [
+  { value: "WFH", label: "Work From Home" },
+  { value: "WFO", label: "Work From Office" },
+  { value: "HYBRID", label: "Hybrid" },
+];
+
+const WEEKDAY_OPTIONS = [
+  { value: "Sunday", label: "Sunday" },
+  { value: "Monday", label: "Monday" },
+  { value: "Tuesday", label: "Tuesday" },
+  { value: "Wednesday", label: "Wednesday" },
+  { value: "Thursday", label: "Thursday" },
+  { value: "Friday", label: "Friday" },
+  { value: "Saturday", label: "Saturday" },
+];
+
+// §29.4 — Last-used defaults persist in localStorage so the next offer
+// letter pre-fills with whatever the admin picked previously. Pure
+// client-side; no backend roundtrip.
+const OFFER_LETTER_DEFAULTS_KEY = "offer-letter-defaults-v1";
+type OfferLetterDefaults = {
+  workMode: string;
+  officeStartTime: string;
+  officeEndTime: string;
+  weeklyOffs: string[];
+};
+const FACTORY_DEFAULTS: OfferLetterDefaults = {
+  workMode: "WFH",
+  officeStartTime: "10:00",
+  officeEndTime: "18:00",
+  weeklyOffs: ["Sunday"],
+};
+function loadOfferLetterDefaults(): OfferLetterDefaults {
+  if (typeof window === "undefined") return FACTORY_DEFAULTS;
+  try {
+    const raw = window.localStorage.getItem(OFFER_LETTER_DEFAULTS_KEY);
+    if (!raw) return FACTORY_DEFAULTS;
+    const parsed = JSON.parse(raw) as Partial<OfferLetterDefaults>;
+    return {
+      workMode: parsed.workMode ?? FACTORY_DEFAULTS.workMode,
+      officeStartTime: parsed.officeStartTime ?? FACTORY_DEFAULTS.officeStartTime,
+      officeEndTime: parsed.officeEndTime ?? FACTORY_DEFAULTS.officeEndTime,
+      weeklyOffs:
+        Array.isArray(parsed.weeklyOffs) && parsed.weeklyOffs.length > 0
+          ? parsed.weeklyOffs
+          : FACTORY_DEFAULTS.weeklyOffs,
+    };
+  } catch {
+    return FACTORY_DEFAULTS;
+  }
+}
+function saveOfferLetterDefaults(d: OfferLetterDefaults): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(OFFER_LETTER_DEFAULTS_KEY, JSON.stringify(d));
+  } catch {
+    /* quota / private mode — non-fatal */
+  }
+}
+
 interface UserOption {
   id: string;
   firstName: string;
   lastName: string;
   employeeId: string | null;
   email: string;
+}
+
+/**
+ * Inline searchable employee picker. Shows a read-only pill when a user is
+ * selected (with a "Change" action), otherwise a search input with a
+ * dropdown of matches. Self-contained state — each instance owns its own
+ * search string so one variant's picker doesn't affect the other.
+ */
+function EmployeePicker({
+  selected,
+  onSelect,
+  onClear,
+  placeholder,
+  id,
+}: {
+  selected: UserOption | null;
+  onSelect: (user: UserOption) => void;
+  onClear: () => void;
+  placeholder: string;
+  id?: string;
+}) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<UserOption[]>([]);
+
+  useEffect(() => {
+    if (query.length < 2) {
+      // reason: clearing transient debounced search results when query too short
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setResults([]);
+      return;
+    }
+    const t = setTimeout(() => {
+      void api
+        .get<{ data: UserOption[] }>("/users", { params: { search: query, limit: "10" } })
+        .then((res) => setResults(res.data.data))
+        .catch(() => {
+          /* silent */
+        });
+    }, 300);
+    return () => clearTimeout(t);
+  }, [query]);
+
+  if (selected) {
+    return (
+      <div className="border-border-default bg-bg-input flex items-center justify-between rounded-md border px-3 py-2">
+        <span className="text-text-primary text-sm">
+          {selected.firstName} {selected.lastName} ({selected.email})
+        </span>
+        <button
+          type="button"
+          onClick={() => {
+            onClear();
+            setQuery("");
+            setResults([]);
+          }}
+          className="text-error-500 text-xs"
+        >
+          Change
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative">
+      <Input
+        id={id}
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder={placeholder}
+      />
+      {results.length > 0 && (
+        <div className="border-border-default bg-bg-surface-raised absolute z-10 mt-1 max-h-48 w-full overflow-y-auto rounded-md border shadow-lg">
+          {results.map((u) => (
+            <button
+              key={u.id}
+              type="button"
+              onClick={() => {
+                onSelect(u);
+                setQuery("");
+                setResults([]);
+              }}
+              className="hover:bg-bg-hover flex w-full items-center justify-between px-3 py-2 text-left text-sm"
+            >
+              <span className="text-text-primary">
+                {u.firstName} {u.lastName}
+              </span>
+              <span className="text-text-muted text-xs">{u.email}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 const VARIANT_OPTIONS = [
@@ -72,26 +234,33 @@ const VARIANT_OPTIONS = [
   },
 ] as const;
 
-const emptyForm = {
-  userId: "",
-  variant: "TEMPLATE" as string,
-  dynamicFields: {} as Record<string, string>,
-  editorContent: "",
-};
+// §29.4 — Initial dynamicFields seeded from the persisted last-used
+// defaults so a fresh form already shows the admin's previous picks for
+// timing, weekly offs, and work mode.
+function buildEmptyForm() {
+  const defaults = loadOfferLetterDefaults();
+  return {
+    userId: "",
+    variant: "TEMPLATE" as string,
+    dynamicFields: {
+      workMode: defaults.workMode,
+      officeStartTime: defaults.officeStartTime,
+      officeEndTime: defaults.officeEndTime,
+      weeklyOffs: defaults.weeklyOffs,
+    } as Record<string, string | string[]>,
+    editorContent: "",
+  };
+}
+const emptyForm = buildEmptyForm();
 
 export default function AdminOfferLettersPage() {
-  const [letters, setLetters] = useState<OfferLetter[]>([]);
-  const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0 });
-  const [isLoading, setIsLoading] = useState(true);
+  const qc = useQueryClient();
+  const [page, setPage] = useState(1);
   const [modal, setModal] = useState<"create" | "view" | null>(null);
   const [form, setForm] = useState(emptyForm);
   const [viewLetter, setViewLetter] = useState<OfferLetter | null>(null);
   const [archiveId, setArchiveId] = useState<string | null>(null);
-  const [users, setUsers] = useState<UserOption[]>([]);
-  const [userSearch, setUserSearch] = useState("");
-  const [fieldKey, setFieldKey] = useState("");
-  const [fieldValue, setFieldValue] = useState("");
-  const [saving, setSaving] = useState(false);
+  const [selectedUser, setSelectedUser] = useState<UserOption | null>(null);
   const [viewType, setViewType] = useState<ViewType>("table");
   const [density, setDensity] = useState<RowDensity>("default");
   const [pinnedIds, setPinnedIds] = useState<Set<string>>(new Set());
@@ -116,6 +285,29 @@ export default function AdminOfferLettersPage() {
     }
   }, []);
 
+  // Server state — paginated list. `placeholderData: keepPreviousData` keeps
+  // the prior page visible during pagination (no skeleton flash).
+  const lettersQuery = useQuery({
+    queryKey: qk.offerLetters.list({ page }),
+    queryFn: () => listOfferLetters({ page, limit: 20 }),
+    placeholderData: keepPreviousData,
+  });
+  const letters = useMemo(() => lettersQuery.data?.data ?? [], [lettersQuery.data]);
+  const pagination = lettersQuery.data?.pagination ?? { page: 1, totalPages: 1, total: 0 };
+  const isLoading = lettersQuery.isLoading;
+
+  // Signatory config — separate query so it caches independently.
+  useQuery({
+    queryKey: [...qk.offerLetters.all(), "signatory-config"] as const,
+    queryFn: async () => {
+      await fetchSignatoryConfig();
+      return null;
+    },
+    staleTime: 10 * 60 * 1000, // settings rarely change
+  });
+
+  const invalidate = () => qc.invalidateQueries({ queryKey: qk.offerLetters.lists() });
+
   const stats = useMemo(() => {
     const total = pagination.total;
     const active = letters.filter((l) => !l.isArchived).length;
@@ -124,50 +316,51 @@ export default function AdminOfferLettersPage() {
     return { total, active, archived, template };
   }, [letters, pagination.total]);
 
-  const fetchData = useCallback(async (page = 1) => {
-    setIsLoading(true);
-    try {
-      const res = await listOfferLetters({ page, limit: 20 });
-      setLetters(res.data);
-      setPagination(res.pagination);
-    } catch {
-      toast.error("Failed to load offer letters");
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
+  // ── Mutations ──
+  const createMutation = useMutation({
+    mutationFn: createOfferLetter,
+    onSuccess: () => {
+      toast.success("Offer letter created");
+      setModal(null);
+      void invalidate();
+    },
+    onError: (err) => toastApiError(err, "Failed to create offer letter"),
+  });
 
-  useEffect(() => {
-    void fetchData();
-    void fetchSignatoryConfig();
-  }, [fetchData, fetchSignatoryConfig]);
+  const archiveMutation = useMutation({
+    mutationFn: archiveOfferLetter,
+    onMutate: async (id: string) => {
+      const key = qk.offerLetters.list({ page });
+      await qc.cancelQueries({ queryKey: key });
+      const prev = qc.getQueryData<typeof lettersQuery.data>(key);
+      qc.setQueryData(key, (old: typeof lettersQuery.data | undefined) =>
+        old
+          ? {
+              ...old,
+              data: old.data.map((l) => (l.id === id ? { ...l, isArchived: true } : l)),
+            }
+          : old,
+      );
+      return { prev, key };
+    },
+    onError: (err, _id, ctx) => {
+      if (ctx) qc.setQueryData(ctx.key, ctx.prev);
+      toastApiError(err, "Failed to archive");
+    },
+    onSuccess: () => {
+      toast.success("Offer letter archived");
+      setArchiveId(null);
+    },
+    onSettled: () => void invalidate(),
+  });
 
-  const searchUsers = useCallback(async (q: string) => {
-    if (q.length < 2) {
-      setUsers([]);
-      return;
-    }
-    try {
-      const res = await api.get<{ data: UserOption[] }>("/users", {
-        params: { search: q, limit: "10" },
-      });
-      setUsers(res.data.data);
-    } catch {
-      /* silent */
-    }
-  }, []);
-
-  useEffect(() => {
-    const t = setTimeout(() => void searchUsers(userSearch), 300);
-    return () => clearTimeout(t);
-  }, [userSearch, searchUsers]);
+  const saving = createMutation.isPending;
 
   const openCreate = () => {
-    setForm(emptyForm);
-    setUserSearch("");
-    setUsers([]);
-    setFieldKey("");
-    setFieldValue("");
+    // Rebuild from localStorage so the latest persisted defaults win even
+    // after the first openCreate of the session.
+    setForm(buildEmptyForm());
+    setSelectedUser(null);
     setModal("create");
   };
   const openView = (letter: OfferLetter) => {
@@ -175,12 +368,34 @@ export default function AdminOfferLettersPage() {
     setModal("view");
   };
 
-  const handleGeneratePdf = async (id: string) => {
+  const handleGeneratePdf = async (letter: OfferLetter) => {
     try {
       toast.loading("Generating PDF...", { id: "gen-pdf" });
-      await generateOfferLetterPdf(id);
-      toast.success("PDF generated successfully", { id: "gen-pdf" });
-      void fetchData();
+      const { fileUrl } = await generateOfferLetterPdf(letter.id);
+      toast.success("PDF generated, downloading...", { id: "gen-pdf" });
+      void invalidate();
+
+      // Fetch the freshly-generated file and trigger a browser download
+      try {
+        const res = await fetch(fileUrl);
+        if (!res.ok) throw new Error("fetch failed");
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const safeName = `${letter.referenceNumber}${
+          letter.user ? `-${letter.user.firstName}-${letter.user.lastName}` : ""
+        }.pdf`.replace(/\s+/g, "_");
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = safeName;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      } catch {
+        toast.error("PDF generated but download failed — use the download button", {
+          id: "gen-pdf",
+        });
+      }
     } catch {
       toast.error("Failed to generate PDF", { id: "gen-pdf" });
     }
@@ -197,61 +412,59 @@ export default function AdminOfferLettersPage() {
     }
   };
 
-  const addField = () => {
-    if (!fieldKey.trim()) return;
-    setForm((f) => ({
-      ...f,
-      dynamicFields: { ...f.dynamicFields, [fieldKey.trim()]: fieldValue },
-    }));
-    setFieldKey("");
-    setFieldValue("");
+  const handleDownloadPdf = async (letter: OfferLetter) => {
+    if (!letter.generatedFileUrl) return;
+    try {
+      const res = await fetch(letter.generatedFileUrl);
+      if (!res.ok) throw new Error("fetch failed");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const safeName = `${letter.referenceNumber}${
+        letter.user ? `-${letter.user.firstName}-${letter.user.lastName}` : ""
+      }.pdf`.replace(/\s+/g, "_");
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = safeName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error("Failed to download PDF");
+    }
   };
 
-  const removeField = (key: string) => {
-    setForm((f) => {
-      const copy = { ...f.dynamicFields };
-      delete copy[key];
-      return { ...f, dynamicFields: copy };
-    });
-  };
-
-  const handleCreate = async () => {
+  const handleCreate = () => {
     if (!form.userId) {
       toast.error("Please select an employee");
       return;
     }
-    setSaving(true);
-    try {
-      await createOfferLetter({
-        userId: form.userId,
-        variant: form.variant,
-        ...(form.variant === "TEMPLATE"
-          ? { dynamicFields: form.dynamicFields }
-          : { editorContent: form.editorContent }),
+    // §29.4 — Persist the timing/work-mode/weekly-offs picks so the next
+    // form open pre-fills with the same choices.
+    if (form.variant === "TEMPLATE") {
+      const df = form.dynamicFields;
+      saveOfferLetterDefaults({
+        workMode: String(df["workMode"] ?? FACTORY_DEFAULTS.workMode),
+        officeStartTime: String(df["officeStartTime"] ?? FACTORY_DEFAULTS.officeStartTime),
+        officeEndTime: String(df["officeEndTime"] ?? FACTORY_DEFAULTS.officeEndTime),
+        weeklyOffs: Array.isArray(df["weeklyOffs"])
+          ? (df["weeklyOffs"] as string[])
+          : FACTORY_DEFAULTS.weeklyOffs,
       });
-      toast.success("Offer letter created");
-      setModal(null);
-      void fetchData();
-    } catch {
-      toast.error("Failed to create offer letter");
-    } finally {
-      setSaving(false);
     }
+    createMutation.mutate({
+      userId: form.userId,
+      variant: form.variant,
+      ...(form.variant === "TEMPLATE"
+        ? { dynamicFields: form.dynamicFields }
+        : { editorContent: form.editorContent }),
+    });
   };
 
-  const handleArchive = async () => {
+  const handleArchive = () => {
     if (!archiveId) return;
-    try {
-      await archiveOfferLetter(archiveId);
-      toast.success("Offer letter archived");
-      setArchiveId(null);
-      void fetchData(pagination.page);
-    } catch {
-      toast.error("Failed to archive");
-    }
+    archiveMutation.mutate(archiveId);
   };
-
-  const selectedUser = users.find((u) => u.id === form.userId);
 
   const columns: Column<OfferLetter>[] = [
     {
@@ -326,7 +539,7 @@ export default function AdminOfferLettersPage() {
                 size="xs"
                 variant="ghost"
                 className="text-primary-500 hover:bg-primary-100"
-                onClick={() => void handleGeneratePdf(l.id)}
+                onClick={() => void handleGeneratePdf(l)}
               />
             </Tooltip>
           )}
@@ -338,7 +551,7 @@ export default function AdminOfferLettersPage() {
                 size="xs"
                 variant="ghost"
                 className="text-success-500 hover:bg-success-100"
-                onClick={() => window.open(l.generatedFileUrl!, "_blank")}
+                onClick={() => void handleDownloadPdf(l)}
               />
             </Tooltip>
           )}
@@ -402,7 +615,7 @@ export default function AdminOfferLettersPage() {
                     variant="ghost"
                     onClick={(e) => {
                       e.stopPropagation();
-                      window.open(l.generatedFileUrl!, "_blank");
+                      void handleDownloadPdf(l);
                     }}
                   />
                 </Tooltip>
@@ -549,7 +762,7 @@ export default function AdminOfferLettersPage() {
         totalPages={pagination.totalPages}
         total={pagination.total}
         pageSize={20}
-        onPageChange={(p) => void fetchData(p)}
+        onPageChange={setPage}
         viewType={viewType}
         onViewTypeChange={setViewType}
         cardRenderer={cardRenderer}
@@ -581,59 +794,6 @@ export default function AdminOfferLettersPage() {
         }
       >
         <div className="space-y-4">
-          {/* Employee Search */}
-          <FormField label="Employee" required>
-            {selectedUser ? (
-              <div className="border-border-default bg-bg-input flex items-center justify-between rounded-md border px-3 py-2">
-                <span className="text-text-primary text-sm">
-                  {selectedUser.firstName} {selectedUser.lastName} ({selectedUser.email})
-                </span>
-                <button
-                  onClick={() => setForm((f) => ({ ...f, userId: "" }))}
-                  className="text-error-500 text-xs"
-                >
-                  Change
-                </button>
-              </div>
-            ) : (
-              <div className="relative">
-                <SearchInput
-                  value={userSearch}
-                  onChange={setUserSearch}
-                  placeholder="Search employee by name or email..."
-                />
-                {users.length > 0 && (
-                  <div className="border-border-default bg-bg-surface-raised absolute z-10 mt-1 max-h-48 w-full overflow-y-auto rounded-md border shadow-lg">
-                    {users.map((u) => (
-                      <button
-                        key={u.id}
-                        onClick={() => {
-                          setForm((f) => ({
-                            ...f,
-                            userId: u.id,
-                            // §29.4.2 — Auto-fill employee name in dynamic fields
-                            dynamicFields: {
-                              ...f.dynamicFields,
-                              employeeName: `${u.firstName} ${u.lastName}`,
-                            },
-                          }));
-                          setUsers([]);
-                          setUserSearch("");
-                        }}
-                        className="hover:bg-bg-hover flex w-full items-center justify-between px-3 py-2 text-left text-sm"
-                      >
-                        <span className="text-text-primary">
-                          {u.firstName} {u.lastName}
-                        </span>
-                        <span className="text-text-muted text-xs">{u.email}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </FormField>
-
           {/* Variant Selection */}
           <FormField label="Variant">
             <div className="grid grid-cols-2 gap-3">
@@ -642,13 +802,20 @@ export default function AdminOfferLettersPage() {
                   key={v.value}
                   onClick={() => setForm((f) => ({ ...f, variant: v.value }))}
                   className={cn(
-                    "rounded-lg border p-3 text-left transition",
+                    "group rounded-lg border p-3 text-left transition",
                     form.variant === v.value
-                      ? "border-primary-500 bg-primary-100"
+                      ? "border-primary-500 bg-primary-500/15"
                       : "border-border-default hover:border-border-hover",
                   )}
                 >
-                  <div className="text-text-primary text-sm font-medium">{v.label}</div>
+                  <div
+                    className={cn(
+                      "text-sm font-medium",
+                      form.variant === v.value ? "text-primary-600" : "text-text-primary",
+                    )}
+                  >
+                    {v.label}
+                  </div>
                   <div className="text-text-muted text-xs">{v.desc}</div>
                 </button>
               ))}
@@ -664,17 +831,30 @@ export default function AdminOfferLettersPage() {
               </p>
 
               <div className="grid grid-cols-2 gap-3">
-                <FormField label="Employee Name *" htmlFor="ol-name">
-                  <Input
+                <FormField label="Employee *" htmlFor="ol-name">
+                  <EmployeePicker
                     id="ol-name"
-                    value={String(form.dynamicFields["employeeName"] ?? "")}
-                    onChange={(e) =>
+                    placeholder="Search employee by name or email..."
+                    selected={selectedUser}
+                    onSelect={(u) => {
+                      setSelectedUser(u);
                       setForm((f) => ({
                         ...f,
-                        dynamicFields: { ...f.dynamicFields, employeeName: e.target.value },
-                      }))
-                    }
-                    placeholder="e.g. Simarjot Kaur"
+                        userId: u.id,
+                        dynamicFields: {
+                          ...f.dynamicFields,
+                          employeeName: `${u.firstName} ${u.lastName}`,
+                        },
+                      }));
+                    }}
+                    onClear={() => {
+                      setSelectedUser(null);
+                      setForm((f) => ({
+                        ...f,
+                        userId: "",
+                        dynamicFields: { ...f.dynamicFields, employeeName: "" },
+                      }));
+                    }}
                   />
                 </FormField>
 
@@ -688,21 +868,60 @@ export default function AdminOfferLettersPage() {
                         dynamicFields: { ...f.dynamicFields, positionTitle: e.target.value },
                       }))
                     }
-                    placeholder="e.g. Hiring Associate (Work From Home)"
+                    placeholder="e.g. Hiring Associate"
+                  />
+                </FormField>
+
+                <FormField label="Work Mode" htmlFor="ol-work-mode">
+                  <Select
+                    id="ol-work-mode"
+                    options={WORK_MODE_OPTIONS}
+                    value={String(form.dynamicFields["workMode"] ?? "WFH")}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        dynamicFields: { ...f.dynamicFields, workMode: e.target.value },
+                      }))
+                    }
                   />
                 </FormField>
 
                 <FormField label="Date of Joining" htmlFor="ol-joining">
-                  <Input
+                  <CalendarDatePicker
                     id="ol-joining"
-                    value={String(form.dynamicFields["joiningDate"] ?? "")}
-                    onChange={(e) =>
+                    value={String(form.dynamicFields["joiningDateISO"] ?? "")}
+                    onChange={(iso) => {
+                      // Store ISO for the picker round-trip and a pretty
+                      // display string ("23rd December 2025") for the PDF.
+                      const formatted = iso
+                        ? (() => {
+                            const [y, m, d] = iso.split("-").map(Number);
+                            if (!y || !m || !d) return iso;
+                            const date = new Date(y, m - 1, d);
+                            const day = date.getDate();
+                            const ord =
+                              day % 10 === 1 && day !== 11
+                                ? "st"
+                                : day % 10 === 2 && day !== 12
+                                  ? "nd"
+                                  : day % 10 === 3 && day !== 13
+                                    ? "rd"
+                                    : "th";
+                            const month = date.toLocaleString("en-GB", { month: "long" });
+                            return `${day}${ord} ${month} ${y}`;
+                          })()
+                        : "";
                       setForm((f) => ({
                         ...f,
-                        dynamicFields: { ...f.dynamicFields, joiningDate: e.target.value },
-                      }))
-                    }
-                    placeholder="e.g. 23rd December 2025"
+                        dynamicFields: {
+                          ...f.dynamicFields,
+                          joiningDate: formatted,
+                          joiningDateISO: iso,
+                        },
+                      }));
+                    }}
+                    placeholder="Select date"
+                    clearable
                   />
                 </FormField>
 
@@ -749,79 +968,104 @@ export default function AdminOfferLettersPage() {
                 </FormField>
               </div>
 
-              {/* Additional custom fields (key-value) for anything beyond the standard 6 */}
-              <details className="text-sm">
-                <summary className="text-text-muted cursor-pointer text-xs">
-                  + Add additional custom fields
-                </summary>
-                <div className="mt-2 flex gap-2">
-                  <Input
-                    value={fieldKey}
-                    onChange={(e) => setFieldKey(e.target.value)}
-                    placeholder="Key (e.g. department)"
-                    className="flex-1"
-                  />
-                  <Input
-                    value={fieldValue}
-                    onChange={(e) => setFieldValue(e.target.value)}
-                    placeholder="Value"
-                    className="flex-1"
-                  />
-                  <Button variant="secondary" onClick={addField} disabled={!fieldKey.trim()}>
-                    Add
-                  </Button>
+              {/* §29.4 — Office timings & weekly offs (rendered into the
+                  boilerplate section 3 of the PDF). Defaults persist in
+                  localStorage and pre-fill on the next form open. */}
+              <div className="border-border-default mt-2 border-t pt-3">
+                <p className="text-text-muted mb-2 text-xs font-medium uppercase tracking-wider">
+                  Office Timings & Leaves
+                </p>
+                <div className="grid grid-cols-2 gap-3">
+                  <FormField label="Start Time" htmlFor="ol-start-time">
+                    <TimePicker
+                      id="ol-start-time"
+                      value={String(form.dynamicFields["officeStartTime"] ?? "10:00")}
+                      onChange={(val) =>
+                        setForm((f) => ({
+                          ...f,
+                          dynamicFields: { ...f.dynamicFields, officeStartTime: val },
+                        }))
+                      }
+                      use12Hour
+                    />
+                  </FormField>
+
+                  <FormField label="End Time" htmlFor="ol-end-time">
+                    <TimePicker
+                      id="ol-end-time"
+                      value={String(form.dynamicFields["officeEndTime"] ?? "18:00")}
+                      onChange={(val) =>
+                        setForm((f) => ({
+                          ...f,
+                          dynamicFields: { ...f.dynamicFields, officeEndTime: val },
+                        }))
+                      }
+                      use12Hour
+                    />
+                  </FormField>
+
+                  <FormField label="Weekly Off (Holidays)" htmlFor="ol-weekly-offs">
+                    <Select
+                      id="ol-weekly-offs"
+                      multiple
+                      options={WEEKDAY_OPTIONS}
+                      value={
+                        Array.isArray(form.dynamicFields["weeklyOffs"])
+                          ? (form.dynamicFields["weeklyOffs"] as string[])
+                          : ["Sunday"]
+                      }
+                      onChange={(e) => {
+                        const selected = Array.from(
+                          e.target.selectedOptions,
+                          (o) => o.value,
+                        );
+                        setForm((f) => ({
+                          ...f,
+                          dynamicFields: {
+                            ...f.dynamicFields,
+                            weeklyOffs: selected.length > 0 ? selected : ["Sunday"],
+                          },
+                        }));
+                      }}
+                    />
+                  </FormField>
                 </div>
-                {Object.entries(form.dynamicFields)
-                  .filter(
-                    ([k]) =>
-                      ![
-                        "employeeName",
-                        "positionTitle",
-                        "joiningDate",
-                        "salaryAmount",
-                        "probationPeriod",
-                        "noticePeriod",
-                      ].includes(k),
-                  )
-                  .map(([k, v]) => (
-                    <div
-                      key={k}
-                      className="bg-bg-muted mt-1 flex items-center gap-2 rounded-sm px-3 py-1.5 text-xs"
-                    >
-                      <span className="text-text-primary font-medium">{k}:</span>
-                      <span className="text-text-secondary flex-1">{v}</span>
-                      <button onClick={() => removeField(k)} className="text-error-500">
-                        Remove
-                      </button>
-                    </div>
-                  ))}
-              </details>
+                <p className="text-text-muted mt-1.5 text-xs">
+                  Work mode (above) is reused here as the short code (e.g. WFH) inside the
+                  timings sentence.
+                </p>
+              </div>
+
             </div>
           )}
 
           {/* §29.4.1.3 — Tiptap Rich Text Editor for custom offer letter body */}
           {form.variant === "TIPTAP_EDITOR" && (
-            <FormField label="Offer Letter Body (Rich Text Editor)">
-              <TiptapEditor
+            <div className="space-y-3">
+              <FormField label="Employee *" htmlFor="ol-tiptap-employee">
+                <EmployeePicker
+                  id="ol-tiptap-employee"
+                  placeholder="Search employee by name or email..."
+                  selected={selectedUser}
+                  onSelect={(u) => {
+                    setSelectedUser(u);
+                    setForm((f) => ({ ...f, userId: u.id }));
+                  }}
+                  onClear={() => {
+                    setSelectedUser(null);
+                    setForm((f) => ({ ...f, userId: "" }));
+                  }}
+                />
+              </FormField>
+              <FormField label="Offer Letter Body (Rich Text Editor)">
+                <TiptapEditor
                 content={form.editorContent}
                 onChange={(html) => setForm((f) => ({ ...f, editorContent: html }))}
                 charLimit={5000}
-                placeholder="Dear {{employeeName}}, We are pleased to offer you..."
-                dynamicFields={[
-                  "employeeName",
-                  "employeeId",
-                  "employeeEmail",
-                  "positionTitle",
-                  "dateOfIssue",
-                  "joiningDate",
-                  "salaryAmount",
-                  "probationPeriod",
-                  "noticePeriod",
-                  "referenceNumber",
-                  "reportingManager",
-                ]}
-              />
-            </FormField>
+                placeholder="Dear [Employee Name], We are pleased to offer you..."
+                />
+              </FormField>
+            </div>
           )}
 
           {/* Signatory Preview + Settings Link */}
@@ -874,9 +1118,12 @@ export default function AdminOfferLettersPage() {
         footer={
           <>
             {viewLetter?.generatedFileUrl && (
-              <a href={viewLetter.generatedFileUrl} target="_blank" rel="noopener noreferrer">
-                <Button leftIcon={FileText}>Download PDF</Button>
-              </a>
+              <Button
+                leftIcon={FileText}
+                onClick={() => void handleDownloadPdf(viewLetter)}
+              >
+                Download PDF
+              </Button>
             )}
             <Button variant="outline" onClick={() => setModal(null)}>
               Close

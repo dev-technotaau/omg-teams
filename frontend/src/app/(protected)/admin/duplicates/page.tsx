@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
 import {
   ChevronDown,
   ChevronRight,
@@ -28,6 +30,10 @@ import {
 import { cn } from "@/lib/utils";
 import { TableSkeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
+import { useTabSearchParam } from "@/hooks";
+
+const DUPLICATE_STATUS_IDS = ["PENDING", "RESOLVED", "DISMISSED", ""] as const;
+type DuplicateStatusId = (typeof DUPLICATE_STATUS_IDS)[number];
 
 // ──────────────────────────────────────────────
 //  Admin Duplicate Management — Spec Section 23.3
@@ -74,33 +80,35 @@ const STATUS_BADGE_VARIANT: Record<string, "warning" | "success" | "default"> = 
 };
 
 export default function AdminDuplicatesPage() {
-  const [data, setData] = useState<PaginatedResponse | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [statusFilter, setStatusFilter] = useState<string>("PENDING");
+  const qc = useQueryClient();
+  const [statusFilter, setStatusFilter] = useTabSearchParam<DuplicateStatusId>(
+    "status",
+    "PENDING",
+    DUPLICATE_STATUS_IDS,
+  );
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [pendingCount, setPendingCount] = useState(0);
   const [merging, setMerging] = useState(false);
 
-  const fetchData = useCallback(async () => {
-    setIsLoading(true);
-    try {
+  const dupQuery = useQuery({
+    queryKey: qk.duplicates.list({ page, statusFilter, search }),
+    queryFn: async () => {
       const params: Record<string, string> = { page: String(page), limit: "20" };
       if (statusFilter) params.status = statusFilter;
       if (search) params.search = search;
       const res = await api.get<PaginatedResponse>("/duplicates", { params });
-      setData(res.data);
-    } catch {
-      toast.error("Failed to load duplicate groups");
-    } finally {
-      setIsLoading(false);
-    }
-  }, [page, statusFilter, search]);
-
-  useEffect(() => {
-    void fetchData();
-  }, [fetchData]);
+      return res.data;
+    },
+    placeholderData: keepPreviousData,
+  });
+  const data = dupQuery.data ?? null;
+  const isLoading = dupQuery.isLoading;
+  const fetchData = useCallback(
+    () => qc.invalidateQueries({ queryKey: qk.duplicates.lists() }),
+    [qc],
+  );
 
   // Fetch pending count for badge
   useEffect(() => {
@@ -241,7 +249,7 @@ export default function AdminDuplicatesPage() {
         }))}
         activeTab={statusFilter}
         onChange={(id) => {
-          setStatusFilter(id);
+          setStatusFilter(id as DuplicateStatusId);
           setPage(1);
         }}
         variant="bordered"

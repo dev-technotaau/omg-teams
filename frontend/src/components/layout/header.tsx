@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState, useRef } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -13,7 +13,6 @@ import {
   BellRing,
   HelpCircle,
   LayoutDashboard,
-  Users,
   FileText,
   Calendar,
   ExternalLink,
@@ -48,7 +47,12 @@ import type { CommandGroup } from "@/components/ui/command-palette";
 
 export function Header() {
   const { user, logout } = useAuth();
-  const { theme, setTheme } = useTheme();
+  const { theme, resolvedTheme, setTheme } = useTheme();
+  const [themeMounted, setThemeMounted] = useState(false);
+  useEffect(() => {
+    setThemeMounted(true);
+  }, []);
+  const isDark = themeMounted && resolvedTheme === "dark";
   const router = useRouter();
   const commandPalette = useCommandPalette();
 
@@ -183,14 +187,6 @@ export function Header() {
             onSelect: () => router.push(ROUTES.DASHBOARD),
           },
           {
-            id: "nav-team",
-            label: "Go to Team",
-            icon: Users,
-            shortcut: "G T",
-            keywords: ["members", "people"],
-            onSelect: () => router.push(ROUTES.TEAM),
-          },
-          {
             id: "nav-reports",
             label: "Go to Reports",
             icon: FileText,
@@ -282,7 +278,7 @@ export function Header() {
           <Link href="/" className="shrink-0 lg:hidden">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src={theme === "dark" ? "/icons/logo.png" : "/icons/logo-light-theme.png"}
+              src={isDark ? "/icons/logo.png" : "/icons/logo-light-theme.png"}
               alt="OMG Teams"
               className="h-8 w-auto"
               onError={(e) => {
@@ -380,16 +376,24 @@ export function Header() {
             )}
           </div>
 
-          {/* Avatar + Dropdown */}
+          {/* Avatar + Dropdown — wrap in a 36x36 (h-9 w-9) box so its
+              layout matches the IconButton md size used by the theme and
+              notification buttons next to it. Without this wrapper the
+              avatar's 32x32 (sm) bounding box throws off the gap-3 visual
+              rhythm because its center sits 2px closer to the bell than
+              the bell sits to the theme button. Avatar visual size stays
+              at sm — only the click target / layout box grows. */}
           <DropdownMenu
             trigger={
-              <Avatar
-                src={user?.profilePhotoUrl}
-                name={user?.name ?? "User"}
-                size="sm"
-                status={ownStatus}
-                className="cursor-pointer"
-              />
+              <div className="flex h-9 w-9 items-center justify-center">
+                <Avatar
+                  src={user?.profilePhotoUrl}
+                  name={user?.name ?? "User"}
+                  size="sm"
+                  status={ownStatus}
+                  className="cursor-pointer"
+                />
+              </div>
             }
             groups={avatarMenuGroups}
             align="right"

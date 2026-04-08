@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
 import { Fingerprint, Plus, Pencil, Trash2, ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
@@ -31,8 +33,18 @@ import {
 // ──────────────────────────────────────────────
 
 export default function PasskeysPage() {
-  const [credentials, setCredentials] = useState<WebAuthnCredential[]>([]);
-  const [loading, setLoading] = useState(true);
+  const qc = useQueryClient();
+  const credentialsQuery = useQuery({
+    queryKey: qk.passkeys.list(),
+    queryFn: listCredentials,
+  });
+  const credentials: WebAuthnCredential[] = credentialsQuery.data ?? [];
+  const loading = credentialsQuery.isLoading;
+  const fetchCredentials = useCallback(
+    () => qc.invalidateQueries({ queryKey: qk.passkeys.all() }),
+    [qc],
+  );
+
   const [registering, setRegistering] = useState(false);
   const [deviceName, setDeviceName] = useState("");
   const [showRegister, setShowRegister] = useState(false);
@@ -41,21 +53,6 @@ export default function PasskeysPage() {
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
   const supported = isWebAuthnSupported();
-
-  const fetchCredentials = useCallback(async () => {
-    try {
-      const creds = await listCredentials();
-      setCredentials(creds);
-    } catch {
-      toast.error("Failed to load passkeys");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void fetchCredentials();
-  }, [fetchCredentials]);
 
   const handleRegister = async () => {
     if (!supported) return;

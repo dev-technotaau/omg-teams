@@ -50,18 +50,22 @@ async function computeDashboardStats(userId: string, role: string) {
   });
   const completionRate = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
 
-  // Target info (for recruiter)
+  // Target info (for recruiter) — §23.9
+  // Uses target.service.getDashboardTarget which:
+  //   • respects both effectiveFrom AND effectiveTo (no expired targets)
+  //   • falls back to global default (recruiterId=null) if no individual
+  //   • prefers DAILY → WEEKLY → MONTHLY (most actionable first)
   let targetValue = 0;
   let targetAchieved = 0;
+  let targetType: "DAILY" | "WEEKLY" | "MONTHLY" | null = null;
   if (role === "RECRUITER") {
-    const activeTarget = await prisma.recruiterTarget.findFirst({
-      where: { recruiterId: userId, isActive: true, effectiveFrom: { lte: new Date() } },
-      orderBy: { effectiveFrom: "desc" },
-    });
+    const { getDashboardTarget } = await import("./target.service.js");
+    const activeTarget = await getDashboardTarget(userId);
     if (activeTarget) {
       targetValue = activeTarget.targetValue;
-      if (activeTarget.targetType === "DAILY") targetAchieved = todayCount;
-      else if (activeTarget.targetType === "WEEKLY") targetAchieved = weekCount;
+      targetType = activeTarget.targetType as "DAILY" | "WEEKLY" | "MONTHLY";
+      if (targetType === "DAILY") targetAchieved = todayCount;
+      else if (targetType === "WEEKLY") targetAchieved = weekCount;
       else targetAchieved = monthCount;
     }
   }
@@ -84,6 +88,7 @@ async function computeDashboardStats(userId: string, role: string) {
     pendingReports: pendingCount,
     targetValue,
     targetAchieved,
+    targetType,
     activeRecruiters,
   };
 }
@@ -315,13 +320,19 @@ export async function getAdminDashboardStats(range = "today") {
   tomorrow.setDate(tomorrow.getDate() + 1);
   const rangeStart = resolveRangeStart(range);
 
-  // Attendance counts for today (always today regardless of range)
+  // Attendance counts for today (always today regardless of range).
+  // Admin is excluded from the attendance system entirely.
+  const attUserFilter = { user: { role: { not: "ADMIN" as const } } };
   const [presentCount, absentCount, lateCount, onLeaveCount, halfDayCount] = await Promise.all([
-    prisma.attendanceRecord.count({ where: { date: today, status: "PRESENT_FULL" } }),
-    prisma.attendanceRecord.count({ where: { date: today, status: "ABSENT" } }),
-    prisma.attendanceRecord.count({ where: { date: today, status: "LATE" } }),
-    prisma.attendanceRecord.count({ where: { date: today, status: "ON_LEAVE" } }),
-    prisma.attendanceRecord.count({ where: { date: today, status: "PRESENT_HALF" } }),
+    prisma.attendanceRecord.count({
+      where: { date: today, status: "PRESENT_FULL", ...attUserFilter },
+    }),
+    prisma.attendanceRecord.count({ where: { date: today, status: "ABSENT", ...attUserFilter } }),
+    prisma.attendanceRecord.count({ where: { date: today, status: "LATE", ...attUserFilter } }),
+    prisma.attendanceRecord.count({ where: { date: today, status: "ON_LEAVE", ...attUserFilter } }),
+    prisma.attendanceRecord.count({
+      where: { date: today, status: "PRESENT_HALF", ...attUserFilter },
+    }),
   ]);
 
   // KPI metrics — scoped by selected range
@@ -346,42 +357,58 @@ export async function getAdminDashboardStats(range = "today") {
   ]);
   const conversionRate = totalSourced > 0 ? Math.round((joinedCount / totalSourced) * 100) : 0;
 
-  // Today's logins from LoginHistory
-  const todayLogins = await prisma.loginHistory.findMany({
-    where: { success: true, createdAt: { gte: today, lt: tomorrow } },
+  // Today's logins — sourced from AttendanceRecord (one row per user per
+  // day, schema-enforced unique on (userId, date)). The previous version
+  // queried loginHistory directly which produced one row per login EVENT,
+  // so a user who logged out and back in showed up multiple times. Mirrors
+  // the pattern already used by the RM dashboard "team logins" query.
+  // Admins are intentionally excluded — they don't have attendance records
+  // because punch-in/out is non-admin only (auth.controller.ts handleLogin).
+  const todayAttendance = await prisma.attendanceRecord.findMany({
+    where: {
+      date: today,
+      punchInTime: { not: null },
+      user: { role: { not: "ADMIN" } },
+    },
     select: {
       id: true,
-      createdAt: true,
-      user: { select: { id: true, firstName: true, lastName: true, role: true } },
+      userId: true,
+      punchInTime: true,
+      isLate: true,
+      user: { select: { firstName: true, lastName: true, role: true } },
     },
-    orderBy: { createdAt: "desc" },
-    take: 50,
+    orderBy: { punchInTime: "desc" },
   });
 
-  // Check which login was late (if attendance says so)
-  const loginUserIds = todayLogins.map((l) => l.user?.id).filter(Boolean) as string[];
-  const attendanceByUser = new Map<string, { isLate: boolean }>();
-  if (loginUserIds.length > 0) {
-    const records = await prisma.attendanceRecord.findMany({
-      where: { date: today, userId: { in: loginUserIds } },
-      select: { userId: true, isLate: true },
-    });
-    for (const r of records) {
-      attendanceByUser.set(r.userId, { isLate: r.isLate });
-    }
+  // Per-user login event count for today — preserves the "this user
+  // re-logged in N times" signal that switching to attendance would
+  // otherwise lose. Surfaced in the UI as a small badge next to users
+  // with > 1 successful login today.
+  const sessionCounts = await prisma.loginHistory.groupBy({
+    by: ["userId"],
+    where: {
+      userId: { in: todayAttendance.map((r) => r.userId) },
+      success: true,
+      createdAt: { gte: today, lt: tomorrow },
+    },
+    _count: { _all: true },
+  });
+  const sessionCountByUser = new Map<string, number>();
+  for (const c of sessionCounts) {
+    if (c.userId) sessionCountByUser.set(c.userId, c._count._all);
   }
 
-  const logins = todayLogins
-    .filter((l) => l.user)
-    .map((l) => ({
-      id: l.id,
-      loginTime: l.createdAt.toISOString(),
-      employeeName: `${l.user!.firstName} ${l.user!.lastName}`,
-      role: l.user!.role,
-      isLate: attendanceByUser.get(l.user!.id)?.isLate ?? false,
-    }));
+  const logins = todayAttendance.map((r) => ({
+    id: r.id,
+    loginTime: r.punchInTime!.toISOString(),
+    employeeName: `${r.user.firstName} ${r.user.lastName}`,
+    role: r.user.role,
+    isLate: r.isLate,
+    sessionCount: sessionCountByUser.get(r.userId) ?? 1,
+  }));
 
   // §6.2 — Employees who have NOT logged in today
+  const loginUserIds = todayAttendance.map((r) => r.userId);
   const loggedInUserIds = new Set(loginUserIds);
   const allActiveEmployees = await prisma.user.findMany({
     where: { role: { in: ["RECRUITER", "REPORTING_MANAGER"] }, status: "ACTIVE" },
@@ -395,11 +422,34 @@ export async function getAdminDashboardStats(range = "today") {
       role: e.role,
     }));
 
-  // Pending actions
-  const [pendingLeaves, pendingDocs, suspendedAccounts] = await Promise.all([
-    prisma.leaveRequest.count({ where: { status: "PENDING" } }),
+  // Pending actions — every counter here represents something that admin
+  // can directly act on. Keep additions to this list ruthlessly tied to
+  // "admin needs to do something" — system-health metrics belong elsewhere.
+  const [
+    pendingLeaves,
+    pendingDocs,
+    suspendedAccounts,
+    unresolvedDuplicates,
+    overdueInvoices,
+    unpaidInvoices,
+    pendingOfferLetters,
+  ] = await Promise.all([
+    prisma.leaveRequest.count({ where: { status: "PENDING", user: { role: { not: "ADMIN" } } } }),
     prisma.employeeDocument.count({ where: { status: "PENDING" } }),
     prisma.user.count({ where: { status: "SUSPENDED", role: { not: "ADMIN" } } }),
+    prisma.duplicateGroup.count({ where: { status: "PENDING" } }),
+    prisma.invoice.count({ where: { paymentStatus: "OVERDUE" } }),
+    prisma.invoice.count({ where: { paymentStatus: "UNPAID" } }),
+    // OfferLetter.status is a free-form String column with values DRAFT /
+    // GENERATED / SENT. The platform has no automated send-to-email flow —
+    // admin generates the PDF, downloads it, sends it manually via their
+    // own channel, then flips the status to SENT as bookkeeping. So:
+    //   • DRAFT     = record created, no PDF yet (no admin action needed,
+    //                 admin knows they're still drafting)
+    //   • GENERATED = PDF exists in R2 but not yet marked as sent ← THIS
+    //                 is the actionable state we want to surface
+    //   • SENT      = admin confirmed delivery, terminal
+    prisma.offerLetter.count({ where: { status: "GENERATED" } }),
   ]);
 
   return {
@@ -423,6 +473,10 @@ export async function getAdminDashboardStats(range = "today") {
       leaveRequests: pendingLeaves,
       kycVerifications: pendingDocs,
       suspendedAccounts,
+      unresolvedDuplicates,
+      overdueInvoices,
+      unpaidInvoices,
+      pendingOfferLetters,
     },
   };
 }

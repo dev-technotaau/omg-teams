@@ -122,7 +122,9 @@ export function startArchiveWorker(): Worker {
       // §23.7 — Handle trash auto-purge jobs
       if (job.name === "trash-purge") {
         logger.info("Starting weekly trash purge job", { jobId: job.id });
-        const purgeResult = await autoPurgeTrash(90);
+        const { getSettingNumber } = await import("../services/settings.service.js");
+        const purgeDays = await getSettingNumber("trash_auto_purge_days", 90);
+        const purgeResult = await autoPurgeTrash(purgeDays);
         logger.info("Trash purge completed", { jobId: job.id, ...purgeResult });
         // §23.7 — Notify admins of purge results
         if (purgeResult.purged > 0) {

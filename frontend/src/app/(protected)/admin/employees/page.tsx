@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
 import {
   Users,
   Eye,
@@ -15,11 +17,17 @@ import {
   Mail,
 } from "lucide-react";
 import { toast } from "sonner";
-import { suspendUser, reactivateUser, resetDevice } from "@/services/user.service";
+import {
+  suspendUser,
+  reactivateUser,
+  resetDevice,
+  assignManager as assignManagerApi,
+  removeManager as removeManagerApi,
+} from "@/services/user.service";
 import { exportToXLSX } from "@/utils/export-table";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { listUsers, type PaginatedUsers } from "@/services/user.service";
+import { listUsers } from "@/services/user.service";
 import {
   PageHeader,
   SearchInput,
@@ -33,7 +41,11 @@ import {
   ConfirmDialog,
   Card,
   FilterPresetsBar,
+  Modal,
+  Button,
+  FormField,
 } from "@/components/ui";
+import { Link2 as LinkIcon, Link2Off } from "lucide-react";
 import type { Column, ViewType, RowDensity } from "@/components/ui";
 import { api } from "@/lib/api";
 import { ROLE_FILTER_OPTIONS } from "@/constants/roles";
@@ -60,8 +72,7 @@ const TABLE_ID = "admin-employees";
 export default function EmployeesPage() {
   const router = useRouter();
   const tableStore = useTableFilters();
-  const [data, setData] = useState<PaginatedUsers | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const qc = useQueryClient();
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search, 300);
   const [roleFilter, setRoleFilter] = useState(tableStore.getFilter(TABLE_ID, "role"));
@@ -88,31 +99,38 @@ export default function EmployeesPage() {
     userName: string;
   } | null>(null);
 
-  // §23.15 — Presence tracking for all visible employees
-  const employeeIds = useMemo(() => (data?.data ?? []).map((e) => e.id), [data?.data]);
-  const presenceMap = usePresence(employeeIds);
+  // §Godview — row-level assign/remove manager/recruiter modal
+  type AssignmentMode =
+    | "assign-manager"
+    | "remove-manager"
+    | "assign-recruiter"
+    | "remove-recruiter";
+  const [assignment, setAssignment] = useState<{
+    mode: AssignmentMode;
+    employee: Employee;
+  } | null>(null);
+  const [assignmentOptions, setAssignmentOptions] = useState<
+    Array<{ id: string; firstName: string; lastName: string; employeeId: string | null }>
+  >([]);
+  const [assignmentLoading, setAssignmentLoading] = useState(false);
+  const [assignmentSelected, setAssignmentSelected] = useState("");
+  const [assignmentSaving, setAssignmentSaving] = useState(false);
 
-  // §6.4 — Fetch list of Reporting Managers for filter dropdown
-  useEffect(() => {
-    void (async () => {
-      try {
-        const res = await api.get<{
-          data: Array<{ id: string; firstName: string; lastName: string }>;
-        }>("/users?role=REPORTING_MANAGER&status=ACTIVE&limit=200");
-        const rms = res.data.data ?? [];
-        setRmOptions([
-          { value: "", label: "All RMs" },
-          ...rms.map((r) => ({ value: r.id, label: `${r.firstName} ${r.lastName}` })),
-        ]);
-      } catch {
-        /* non-critical */
-      }
-    })();
-  }, []);
-
-  const fetchData = useCallback(async () => {
-    setIsLoading(true);
-    try {
+  // Server state — paginated, filtered employee list. Filters become part
+  // of the query key so each filter combo caches independently and switching
+  // between them shows cached data instantly.
+  const employeesQuery = useQuery({
+    queryKey: qk.employees.list({
+      page,
+      search: debouncedSearch,
+      role: roleFilter,
+      status: statusFilter,
+      managerId: managerFilter,
+      kycStatus: kycFilter,
+      sortKey,
+      sortDir,
+    }),
+    queryFn: () => {
       const params: Record<string, string> = {
         page: String(page),
         limit: String(DEFAULT_LARGE_PAGE_SIZE),
@@ -126,15 +144,140 @@ export default function EmployeesPage() {
         params["sortBy"] = sortKey;
         params["sortDir"] = sortDir;
       }
-      setData(await listUsers(params));
-    } finally {
-      setIsLoading(false);
-    }
-  }, [page, debouncedSearch, roleFilter, statusFilter, managerFilter, kycFilter, sortKey, sortDir]);
+      return listUsers(params);
+    },
+    placeholderData: keepPreviousData,
+  });
+  const data = employeesQuery.data ?? null;
+  const isLoading = employeesQuery.isLoading;
 
+  const fetchData = useCallback(
+    () => qc.invalidateQueries({ queryKey: qk.employees.lists() }),
+    [qc],
+  );
+
+  const openAssignment = async (mode: AssignmentMode, emp: Employee) => {
+    setAssignment({ mode, employee: emp });
+    setAssignmentSelected("");
+    setAssignmentLoading(true);
+    try {
+      if (mode === "assign-manager") {
+        const res = await api.get<{
+          data: Array<{
+            id: string;
+            firstName: string;
+            lastName: string;
+            employeeId: string | null;
+          }>;
+        }>("/users?role=REPORTING_MANAGER&status=ACTIVE&limit=500");
+        const assigned = new Set(emp.assignedManagers ?? []);
+        // assignedManagers from list endpoint is an array of "First Last" strings; we can't
+        // reliably diff by ID here, so show all active RMs and rely on backend uniqueness.
+        setAssignmentOptions(
+          (res.data.data ?? []).filter(
+            (u) => !assigned.has(`${u.firstName} ${u.lastName}`),
+          ),
+        );
+      } else if (mode === "assign-recruiter") {
+        const res = await api.get<{
+          data: Array<{
+            id: string;
+            firstName: string;
+            lastName: string;
+            employeeId: string | null;
+          }>;
+        }>("/users?role=RECRUITER&status=ACTIVE&limit=500");
+        setAssignmentOptions(res.data.data ?? []);
+      } else {
+        // remove-* — need to fetch the current assignments from the detail endpoint
+        // because the list row only has string names.
+        const detail = await api.get<{
+          user: {
+            managers?: Array<{
+              manager: { id: string; firstName: string; lastName: string };
+            }>;
+            managedRecruiters?: Array<{
+              recruiter: { id: string; firstName: string; lastName: string };
+            }>;
+          };
+        }>(`/users/${emp.id}`);
+        if (mode === "remove-manager") {
+          setAssignmentOptions(
+            (detail.data.user.managers ?? []).map((m) => ({
+              id: m.manager.id,
+              firstName: m.manager.firstName,
+              lastName: m.manager.lastName,
+              employeeId: null,
+            })),
+          );
+        } else {
+          setAssignmentOptions(
+            (detail.data.user.managedRecruiters ?? []).map((r) => ({
+              id: r.recruiter.id,
+              firstName: r.recruiter.firstName,
+              lastName: r.recruiter.lastName,
+              employeeId: null,
+            })),
+          );
+        }
+      }
+    } catch {
+      toast.error("Failed to load options");
+    } finally {
+      setAssignmentLoading(false);
+    }
+  };
+
+  const submitAssignment = async () => {
+    if (!assignment || !assignmentSelected) return;
+    setAssignmentSaving(true);
+    try {
+      const { mode, employee: emp } = assignment;
+      if (mode === "assign-manager") {
+        await assignManagerApi(emp.id, assignmentSelected);
+        toast.success("Manager assigned");
+      } else if (mode === "remove-manager") {
+        await removeManagerApi(emp.id, assignmentSelected);
+        toast.success("Manager removed");
+      } else if (mode === "assign-recruiter") {
+        await assignManagerApi(assignmentSelected, emp.id);
+        toast.success("Recruiter assigned");
+      } else {
+        await removeManagerApi(assignmentSelected, emp.id);
+        toast.success("Recruiter removed");
+      }
+      setAssignment(null);
+      void fetchData();
+    } catch {
+      toast.error("Failed to update assignment");
+    } finally {
+      setAssignmentSaving(false);
+    }
+  };
+
+  // §23.15 — Presence tracking for all visible employees
+  const employeeIds = useMemo(() => (data?.data ?? []).map((e) => e.id), [data?.data]);
+  const presenceMap = usePresence(employeeIds);
+
+  // §6.4 — Fetch list of Reporting Managers for filter dropdown
+  const rmQuery = useQuery({
+    queryKey: qk.users.list({ role: "REPORTING_MANAGER", status: "ACTIVE", limit: 200 }),
+    queryFn: async () => {
+      const res = await api.get<{
+        data: Array<{ id: string; firstName: string; lastName: string }>;
+      }>("/users?role=REPORTING_MANAGER&status=ACTIVE&limit=200");
+      return res.data.data ?? [];
+    },
+    staleTime: 5 * 60 * 1000,
+  });
   useEffect(() => {
-    void fetchData();
-  }, [fetchData]);
+    if (rmQuery.data) {
+      setRmOptions([
+        { value: "", label: "All RMs" },
+        ...rmQuery.data.map((r) => ({ value: r.id, label: `${r.firstName} ${r.lastName}` })),
+      ]);
+    }
+  }, [rmQuery.data]);
 
   const handleConfirmAction = async () => {
     if (!confirmAction) return;
@@ -549,6 +692,30 @@ export default function EmployeesPage() {
               setConfirmAction({ type: "resetDevice", userId: emp.id, userName: name }),
           });
         }
+        if (emp.role === "RECRUITER") {
+          items.push({
+            label: "Assign Reporting Manager",
+            icon: LinkIcon,
+            onClick: () => void openAssignment("assign-manager", emp),
+          });
+          items.push({
+            label: "Remove Reporting Manager",
+            icon: Link2Off,
+            onClick: () => void openAssignment("remove-manager", emp),
+          });
+        }
+        if (emp.role === "REPORTING_MANAGER") {
+          items.push({
+            label: "Assign Recruiter",
+            icon: LinkIcon,
+            onClick: () => void openAssignment("assign-recruiter", emp),
+          });
+          items.push({
+            label: "Remove Recruiter",
+            icon: Link2Off,
+            onClick: () => void openAssignment("remove-recruiter", emp),
+          });
+        }
 
         return (
           <DropdownMenu
@@ -799,7 +966,7 @@ export default function EmployeesPage() {
         pinnedIds={pinnedIds}
         onPinChange={setPinnedIds}
         detailRenderer={detailRenderer}
-        detailTitle={(emp) => `${emp.firstName} ${emp.lastName}`}
+        detailTitle={() => "Quick View"}
         enableKeyboardNav
         // View toggle
         viewType={viewType}
@@ -830,6 +997,68 @@ export default function EmployeesPage() {
           );
         }}
       />
+
+      {/* §Godview — Assign/Remove manager/recruiter modal */}
+      <Modal
+        open={assignment !== null}
+        onClose={() => setAssignment(null)}
+        title={
+          assignment?.mode === "assign-manager"
+            ? `Assign Reporting Manager to ${assignment.employee.firstName} ${assignment.employee.lastName}`
+            : assignment?.mode === "remove-manager"
+              ? `Remove Reporting Manager from ${assignment.employee.firstName} ${assignment.employee.lastName}`
+              : assignment?.mode === "assign-recruiter"
+                ? `Assign Recruiter to ${assignment.employee.firstName} ${assignment.employee.lastName}`
+                : assignment?.mode === "remove-recruiter"
+                  ? `Remove Recruiter from ${assignment.employee.firstName} ${assignment.employee.lastName}`
+                  : ""
+        }
+        size="sm"
+      >
+        <div className="space-y-3">
+          {assignmentLoading ? (
+            <p className="text-text-muted text-sm">Loading options…</p>
+          ) : assignmentOptions.length === 0 ? (
+            <p className="text-text-muted text-sm">
+              {assignment?.mode.startsWith("remove")
+                ? "No current assignments to remove."
+                : "No eligible users available."}
+            </p>
+          ) : (
+            <FormField
+              label={
+                assignment?.mode.includes("manager") ? "Reporting Manager" : "Recruiter"
+              }
+              htmlFor="row-assignment-select"
+              required
+            >
+              <Select
+                id="row-assignment-select"
+                value={assignmentSelected}
+                onChange={(e) => setAssignmentSelected(e.target.value)}
+                options={[
+                  { value: "", label: "— Select —" },
+                  ...assignmentOptions.map((u) => ({
+                    value: u.id,
+                    label: `${u.firstName} ${u.lastName}${u.employeeId ? ` (${u.employeeId})` : ""}`,
+                  })),
+                ]}
+              />
+            </FormField>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setAssignment(null)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void submitAssignment()}
+              disabled={!assignmentSelected || assignmentLoading || assignmentSaving}
+            >
+              {assignmentSaving ? "Saving…" : "Confirm"}
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       {/* §6.4 — Confirm action dialog */}
       <ConfirmDialog

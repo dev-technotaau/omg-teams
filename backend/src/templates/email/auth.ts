@@ -118,3 +118,25 @@ export const deviceLockBlocked = (userName: string, deviceInfo?: string): EmailT
   ),
   text: `Hi ${userName}, a login attempt was blocked from an unauthorized device. Contact admin to reset your device binding.`,
 });
+
+/**
+ * Generic platform alert delivered to addresses in `notification_admin_emails`.
+ * Used by the cross-cutting `notifyAdmins` helper to forward security/system
+ * events to ops mailboxes that aren't tied to a user account.
+ */
+export const systemAlert = (
+  title: string,
+  message: string,
+  actionUrl?: string | null,
+): EmailTemplate => ({
+  subject: `${BRAND.name} — ${title}`,
+  html: emailLayout(
+    `${heading(title)}
+    ${paragraph(message)}
+    ${actionUrl ? button("Open in " + BRAND.name, actionUrl) : ""}
+    ${warningBox("This alert was sent to your address because it's listed in the platform's admin alert recipients. Manage recipients in Admin → Settings → Notifications.")}
+    ${signature()}`,
+    `${title}: ${message.slice(0, 120)}`,
+  ),
+  text: `${title}\n\n${message}${actionUrl ? `\n\nOpen: ${actionUrl}` : ""}`,
+});

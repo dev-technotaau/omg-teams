@@ -26,7 +26,7 @@ import {
   Card,
   Avatar,
   FormField,
-  Input,
+  PhoneInput,
   Textarea,
   Button,
   Badge,
@@ -305,11 +305,10 @@ export default function ProfilePage() {
           </div>
 
           <FormField label="Mobile Number" htmlFor="mobile">
-            <Input
+            <PhoneInput
               id="mobile"
-              type="tel"
               value={mobileNumber}
-              onChange={(e) => setMobileNumber(e.target.value)}
+              onChange={setMobileNumber}
               placeholder="Enter mobile number"
             />
           </FormField>

@@ -264,11 +264,14 @@ export const TimePicker = React.forwardRef<HTMLInputElement, TimePickerProps>(
           aria-haspopup="dialog"
           aria-expanded={open}
           className={cn(
-            "bg-bg-input text-text-primary relative w-full rounded-md pr-3 pl-9 text-left",
+            "bg-bg-input text-text-primary relative w-full rounded-md pl-9 text-left",
             "border-border-default border transition-colors",
             "focus:border-border-focus focus:ring-primary-500 focus:ring-1 focus:outline-hidden",
             "disabled:cursor-not-allowed disabled:opacity-50",
             sizeClasses[size],
+            // Reserve room for the clear (X) button when shown so the time
+            // text doesn't bleed under it.
+            clearable && value && !disabled ? "pr-8" : "pr-3",
             !value && "text-text-muted",
             error && "border-error-500",
           )}

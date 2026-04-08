@@ -50,6 +50,8 @@ export function PWAPrompt() {
   // §24.19.1 — iOS Safari: show manual "Add to Home Screen" prompt
   useEffect(() => {
     if (isIOS() && !isStandalone() && !sessionStorage.getItem("pwa_install_dismissed")) {
+      // reason: one-shot client-only check after mount (browser API access)
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setShowIOSInstall(true);
     }
   }, []);
@@ -58,11 +60,28 @@ export function PWAPrompt() {
   useEffect(() => {
     if (!("serviceWorker" in navigator)) return;
 
+    // Dismissal memory — if the user said "not now" for the current waiting
+    // worker, don't nag them on every refresh. The flag is cleared whenever
+    // a genuinely new update appears (`updatefound`) or the user clicks
+    // Update (controllerchange → reload).
+    const DISMISSED_KEY = "pwa-update-dismissed";
+    const isDismissed = () => {
+      try {
+        return localStorage.getItem(DISMISSED_KEY) === "1";
+      } catch {
+        return false;
+      }
+    };
+
     let reloading = false;
-    // When the controller changes (new SW took over), reload the page once
     const onControllerChange = () => {
       if (reloading) return;
       reloading = true;
+      try {
+        localStorage.removeItem(DISMISSED_KEY);
+      } catch {
+        /* ignore */
+      }
       window.location.reload();
     };
     navigator.serviceWorker.addEventListener("controllerchange", onControllerChange);
@@ -73,18 +92,25 @@ export function PWAPrompt() {
         if (!registration) return;
 
         // Case A: a waiting worker already exists when we mounted
-        if (registration.waiting && navigator.serviceWorker.controller) {
+        if (
+          registration.waiting &&
+          navigator.serviceWorker.controller &&
+          !isDismissed()
+        ) {
           setShowUpdate(true);
         }
 
-        // Case B: a new worker appears later during this session
+        // Case B: a new worker appears later during this session —
+        // this is a genuinely new update, so clear any stale dismissal.
         registration.addEventListener("updatefound", () => {
           const newWorker = registration.installing;
           if (!newWorker) return;
+          try {
+            localStorage.removeItem(DISMISSED_KEY);
+          } catch {
+            /* ignore */
+          }
           newWorker.addEventListener("statechange", () => {
-            // Only show the banner if the page is currently controlled by an
-            // OLDER SW. On first-ever install there's no controller — nothing
-            // to "update" from, so we stay silent.
             if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
               setShowUpdate(true);
             }
@@ -201,6 +227,20 @@ export function PWAPrompt() {
             className="bg-info-600 hover:bg-info-700 active:bg-info-800 shrink-0 cursor-pointer rounded-md px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-all duration-200 hover:scale-105 hover:shadow-md active:scale-95"
           >
             Refresh
+          </button>
+          <button
+            onClick={() => {
+              try {
+                localStorage.setItem("pwa-update-dismissed", "1");
+              } catch {
+                /* ignore */
+              }
+              setShowUpdate(false);
+            }}
+            aria-label="Dismiss update"
+            className="text-info-700 hover:bg-info-100 shrink-0 cursor-pointer rounded-md p-1 transition"
+          >
+            <X size={16} />
           </button>
         </div>
       )}

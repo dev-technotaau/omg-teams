@@ -19,7 +19,12 @@ export async function bulkAssignCompany(ids: string[], companyId: string) {
   return res.data;
 }
 
-export async function bulkRestore(ids: string[]) {
-  const res = await api.post<{ restored: number }>("/bulk/restore", { ids });
+export type BulkRestoreItem = {
+  id: string;
+  entityType: "candidate" | "company" | "serviceProvider" | "hrManager" | "user";
+};
+
+export async function bulkRestore(items: BulkRestoreItem[]) {
+  const res = await api.post<{ restored: number }>("/bulk/restore", { items });
   return res.data;
 }

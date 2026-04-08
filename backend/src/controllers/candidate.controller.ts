@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { getPrisma } from "../config/database.js";
 import { ForbiddenError } from "../exceptions/forbidden-error.js";
+import { logger } from "../instrument.js";
 import * as candidateSvc from "../services/candidate.service.js";
 import { generateInvoiceNumber } from "../services/invoice.service.js";
 import { maskCandidateRecord, maskCandidateRecords } from "../utils/pii-masking.js";
@@ -131,27 +132,20 @@ export async function handleCreateCandidate(req: Request, res: Response): Promis
 
   // §11.4 — Notify admins + RMs of report submission
   try {
-    const { onReportSubmitted, onTargetAchieved } =
-      await import("../services/notification-triggers.js");
+    const { onReportSubmitted } = await import("../services/notification-triggers.js");
     void onReportSubmitted(req.user!.id, 1);
 
-    // Check if daily target achieved
-    const { getPrisma: getDb } = await import("../config/database.js");
-    const db = getDb();
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    const [dailyCount, activeTarget] = await Promise.all([
-      db.candidateReport.count({
-        where: { recruiterId: req.user!.id, createdAt: { gte: todayStart }, deletedAt: null },
-      }),
-      db.recruiterTarget.findFirst({
-        where: { recruiterId: req.user!.id, targetType: "DAILY", isActive: true },
-        select: { targetValue: true },
-      }),
-    ]);
-    if (activeTarget && dailyCount >= activeTarget.targetValue) {
-      void onTargetAchieved(req.user!.id, dailyCount);
-    }
+    // §23.9 — Check all three target types (DAILY/WEEKLY/MONTHLY) and
+    // fire the achievement notification at most once per period via
+    // Redis SETNX dedup. Replaces the old daily-only, fires-every-
+    // submission logic.
+    const { checkAndFireAchievement } = await import("../services/target.service.js");
+    void checkAndFireAchievement(req.user!.id).catch((err: unknown) => {
+      logger.error("checkAndFireAchievement failed", {
+        recruiterId: req.user!.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
   } catch {
     /* non-critical */
   }

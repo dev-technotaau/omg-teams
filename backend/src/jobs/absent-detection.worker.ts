@@ -48,6 +48,25 @@ async function processAbsentDetection(job: Job): Promise<void> {
   const now = new Date();
   const todayDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
+  // §27.5 — Skip non-working days. Reads `working_days` from PlatformSetting
+  // (CSV like "Mon,Tue,Wed,Thu,Fri,Sat"); defaults to Mon-Sat if unset.
+  const { getSettingCSV } = await import("../services/settings.service.js");
+  const workingDays = await getSettingCSV("working_days", [
+    "Mon",
+    "Tue",
+    "Wed",
+    "Thu",
+    "Fri",
+    "Sat",
+  ]);
+  const dayName = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][todayDate.getDay()]!;
+  const workingSet = new Set(workingDays.map((d) => d.slice(0, 3).toLowerCase()));
+  if (!workingSet.has(dayName.toLowerCase())) {
+    logger.info("Absent detection: skipping non-working day", { day: dayName });
+    await job.updateProgress(100);
+    return;
+  }
+
   // Get all active non-admin users
   const activeUsers = await prisma.user.findMany({
     where: {

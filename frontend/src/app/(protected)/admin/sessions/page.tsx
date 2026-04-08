@@ -1,11 +1,17 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { Trash2, Monitor, RefreshCw, Users, ShieldCheck } from "lucide-react";
+import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
+import { Trash2, Monitor, RefreshCw, Users, ShieldCheck, History } from "lucide-react";
 import { toast } from "sonner";
 import { api, extractApiError } from "@/lib/api";
 import { listSessions, revokeSession, revokeUserSessions } from "@/services/session-admin.service";
-import type { AdminSession } from "@/services/session-admin.service";
+import type {
+  AdminSession,
+  SessionSummary,
+  SessionRoleFilter,
+  SessionView,
+} from "@/services/session-admin.service";
 import {
   PageHeader,
   Button,
@@ -16,14 +22,15 @@ import {
   ConfirmDialog,
   Card,
   Tooltip,
+  Tabs,
 } from "@/components/ui";
 import type { Column, ViewType, RowDensity } from "@/components/ui";
 import { formatDateTime } from "@/utils/date";
 import { exportToXLSX } from "@/utils/export-table";
-import { ROLES } from "@/constants/roles";
 import { DEFAULT_LARGE_PAGE_SIZE } from "@/constants/pagination";
 import { ROLE_BADGE_VARIANT } from "@/constants/statuses";
 import { timeAgo } from "@/utils/date";
+import { useTabSearchParam } from "@/hooks";
 
 // ──────────────────────────────────────────────
 //  Session Management — Spec Section 4
@@ -42,51 +49,73 @@ const relativeTime = timeAgo;
 export default function SessionManagementPage() {
   const [sessions, setSessions] = useState<AdminSession[]>([]);
   const [pagination, setPagination] = useState<Pagination | null>(null);
+  const [summary, setSummary] = useState<SessionSummary>({
+    total: 0,
+    admins: 0,
+    recruiters: 0,
+    managers: 0,
+  });
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  // Tab state in URL: ?view=active|history & ?role=ADMIN|EMPLOYEE
+  // Survives reloads, browser back/forward, and link sharing.
+  const [viewMode, setViewModeRaw] = useTabSearchParam<SessionView>("view", "active", [
+    "active",
+    "history",
+  ]);
+  const [roleFilter, setRoleFilterRaw] = useTabSearchParam<SessionRoleFilter>("role", "", [
+    "",
+    "ADMIN",
+    "EMPLOYEE",
+  ]);
   const [isLoading, setIsLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [confirmAction, setConfirmAction] = useState<{
-    type: "revoke" | "revokeUser" | "revokeAll";
+    type: "revoke" | "revokeUser" | "revokeAll" | "bulkRevoke";
     id?: string;
     userId?: string;
     userName?: string;
+    ids?: Set<string>;
   } | null>(null);
   const [sortKey, setSortKey] = useState("");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [viewType, setViewType] = useState<ViewType>("table");
   const [density, setDensity] = useState<RowDensity>("default");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const intervalRef = useRef<ReturnType<typeof setInterval>>(null);
 
-  const fetchSessions = useCallback(async () => {
-    try {
-      const result = await listSessions({
+  const qc = useQueryClient();
+  const sessionsQuery = useQuery({
+    queryKey: ["admin-sessions", { page, viewMode, roleFilter, sortKey, sortDir }] as const,
+    queryFn: () =>
+      listSessions({
         page,
         limit: DEFAULT_LARGE_PAGE_SIZE,
+        view: viewMode,
+        ...(roleFilter ? { role: roleFilter } : {}),
         ...(sortKey ? { sortBy: sortKey, sortDir } : {}),
-      });
-      setSessions(result.data);
-      setPagination(result.pagination);
-    } catch (err) {
-      toast.error(extractApiError(err).message);
-    } finally {
+      }),
+    placeholderData: keepPreviousData,
+    refetchInterval: 30_000,
+  });
+  useEffect(() => {
+    if (sessionsQuery.data) {
+      // reason: bridging react-query result into pre-existing per-piece state
+      /* eslint-disable react-hooks/set-state-in-effect */
+      setSessions(sessionsQuery.data.data);
+      setPagination(sessionsQuery.data.pagination);
+      setSummary(sessionsQuery.data.summary);
+      setCurrentSessionId(sessionsQuery.data.currentSessionId);
       setIsLoading(false);
+      /* eslint-enable react-hooks/set-state-in-effect */
     }
-  }, [page, sortKey, sortDir]);
-
-  useEffect(() => {
-    setIsLoading(true);
-    void fetchSessions();
-  }, [fetchSessions]);
-
-  // Auto-refresh every 30 seconds
-  useEffect(() => {
-    intervalRef.current = setInterval(() => {
-      void fetchSessions();
-    }, 30_000);
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, [fetchSessions]);
+    if (sessionsQuery.isError) toast.error(extractApiError(sessionsQuery.error).message);
+  }, [sessionsQuery.data, sessionsQuery.isError, sessionsQuery.error]);
+  const fetchSessions = useCallback(
+    () => qc.invalidateQueries({ queryKey: ["admin-sessions"] }),
+    [qc],
+  );
+  void intervalRef;
 
   const handleConfirmAction = async () => {
     if (!confirmAction) return;
@@ -97,9 +126,26 @@ export default function SessionManagementPage() {
       } else if (confirmAction.type === "revokeUser") {
         await revokeUserSessions(confirmAction.userId!);
         toast.success(`All sessions revoked for ${confirmAction.userName}`);
+      } else if (confirmAction.type === "bulkRevoke") {
+        const ids = confirmAction.ids ?? new Set<string>();
+        for (const id of ids) await revokeSession(id);
+        toast.success(`${ids.size} session${ids.size === 1 ? "" : "s"} revoked`);
+        setSelectedIds(new Set());
       } else {
-        await api.delete("/admin/sessions");
-        toast.success("All sessions revoked");
+        // Revoke all OTHER sessions — backend keeps the caller's
+        // own session alive so the admin doesn't get logged out.
+        const res = await api.delete<{
+          message: string;
+          revoked: number;
+          affectedUsers: number;
+        }>("/admin/sessions");
+        const { revoked = 0, affectedUsers = 0 } = res.data ?? {};
+        toast.success(
+          revoked === 0
+            ? "No other sessions to revoke"
+            : `Revoked ${revoked} session${revoked === 1 ? "" : "s"} ` +
+                `across ${affectedUsers} user${affectedUsers === 1 ? "" : "s"}`,
+        );
       }
       void fetchSessions();
     } catch (err) {
@@ -164,80 +210,125 @@ export default function SessionManagementPage() {
     return sorted;
   }, [sessions, sortKey, sortDir]);
 
-  // Summary counts
-  const activeCount = pagination?.total ?? 0;
-  const recruitersOnline = sessions.filter((s) => s.user.role === ROLES.RECRUITER).length;
-  const managersOnline = sessions.filter((s) => s.user.role === ROLES.REPORTING_MANAGER).length;
+  // Summary counts — driven by the API's global summary so they
+  // reflect everyone, regardless of which tab is selected.
+  const activeCount = summary.total;
+  const adminsOnline = summary.admins;
+  const employeesOnline = summary.recruiters + summary.managers;
 
-  // DataTable columns
-  const columns: Column<AdminSession>[] = [
-    {
-      key: "user",
-      header: "User",
-      sortable: true,
-      cell: (s) => (
-        <div>
-          <p className="text-text-primary font-medium">
-            {s.user.firstName} {s.user.lastName}
+  // DataTable columns — branch on viewMode. Active view shows the
+  // revoke actions column; history view shows Status + Ended-at and
+  // hides the actions (rows are already terminated).
+  const columns = useMemo<Column<AdminSession>[]>(() => {
+    const base: Column<AdminSession>[] = [
+      {
+        key: "user",
+        header: "User",
+        sortable: true,
+        cell: (s) => (
+          <div>
+            <div className="flex items-center gap-2">
+              <p className="text-text-primary font-medium">
+                {s.user.firstName} {s.user.lastName}
+              </p>
+              {viewMode === "active" && s.token === currentSessionId && (
+                <Badge variant="success" size="sm">
+                  This session
+                </Badge>
+              )}
+            </div>
+            <p className="text-text-muted font-mono text-xs">{s.user.employeeId}</p>
+          </div>
+        ),
+      },
+      {
+        key: "role",
+        header: "Role",
+        sortable: true,
+        cell: (s) => (
+          <Badge variant={ROLE_BADGE_VARIANT[s.user.role] ?? "default"}>
+            {s.user.role.replace("_", " ")}
+          </Badge>
+        ),
+      },
+      {
+        key: "deviceId",
+        header: "Device ID",
+        cell: (s) => (
+          <span className="text-text-secondary font-mono text-xs" title={s.deviceId}>
+            {s.deviceId.slice(0, 12)}...
+          </span>
+        ),
+      },
+      {
+        key: "ipAddress",
+        header: "IP Address",
+        sortable: true,
+        cell: (s) => <span className="text-text-secondary">{s.ipAddress ?? "—"}</span>,
+      },
+      {
+        key: "userAgent",
+        header: "User Agent",
+        cell: (s) => (
+          <p
+            className="text-text-secondary max-w-[200px] truncate text-xs"
+            title={s.userAgent ?? undefined}
+          >
+            {s.userAgent ?? "—"}
           </p>
-          <p className="text-text-muted font-mono text-xs">{s.user.employeeId}</p>
-        </div>
-      ),
-    },
-    {
-      key: "role",
-      header: "Role",
-      sortable: true,
-      cell: (s) => (
-        <Badge variant={ROLE_BADGE_VARIANT[s.user.role] ?? "default"}>
-          {s.user.role.replace("_", " ")}
-        </Badge>
-      ),
-    },
-    {
-      key: "deviceId",
-      header: "Device ID",
-      cell: (s) => (
-        <span className="text-text-secondary font-mono text-xs" title={s.deviceId}>
-          {s.deviceId.slice(0, 12)}...
-        </span>
-      ),
-    },
-    {
-      key: "ipAddress",
-      header: "IP Address",
-      sortable: true,
-      cell: (s) => <span className="text-text-secondary">{s.ipAddress ?? "—"}</span>,
-    },
-    {
-      key: "userAgent",
-      header: "User Agent",
-      cell: (s) => (
-        <p
-          className="text-text-secondary max-w-[200px] truncate text-xs"
-          title={s.userAgent ?? undefined}
-        >
-          {s.userAgent ?? "—"}
-        </p>
-      ),
-    },
-    {
-      key: "createdAt",
-      header: "Created At",
-      sortable: true,
-      cell: (s) => (
-        <span className="text-text-secondary text-xs">{formatDateTime(s.createdAt)}</span>
-      ),
-    },
-    {
-      key: "lastActiveAt",
-      header: "Last Active",
-      sortable: true,
-      cell: (s) => (
-        <span className="text-text-secondary text-xs">{relativeTime(s.lastActiveAt)}</span>
-      ),
-    },
-    {
+        ),
+      },
+      {
+        key: "createdAt",
+        header: "Created At",
+        sortable: true,
+        cell: (s) => (
+          <span className="text-text-secondary text-xs">{formatDateTime(s.createdAt)}</span>
+        ),
+      },
+      {
+        key: "lastActiveAt",
+        header: "Last Active",
+        sortable: true,
+        cell: (s) => (
+          <span className="text-text-secondary text-xs">{relativeTime(s.lastActiveAt)}</span>
+        ),
+      },
+    ];
+
+    if (viewMode === "history") {
+      base.push(
+        {
+          key: "status",
+          header: "Ended By",
+          cell: (s) =>
+            s.revokedAt ? (
+              <Badge variant="danger" size="sm">
+                Logged out / Revoked
+              </Badge>
+            ) : (
+              <Badge variant="warning" size="sm">
+                Idle timeout
+              </Badge>
+            ),
+        },
+        {
+          key: "revokedAt",
+          header: "Ended At",
+          sortable: true,
+          cell: (s) => (
+            <span className="text-text-secondary text-xs">
+              {/* Explicit revoke time wins; otherwise the row was idled
+                  out and lastActiveAt is the closest proxy for "ended". */}
+              {formatDateTime(s.revokedAt ?? s.lastActiveAt)}
+            </span>
+          ),
+        },
+      );
+      return base;
+    }
+
+    base.push({
       key: "actions",
       header: "Actions",
       cell: (s) => (
@@ -275,8 +366,9 @@ export default function SessionManagementPage() {
           </Tooltip>
         </div>
       ),
-    },
-  ];
+    });
+    return base;
+  }, [viewMode, currentSessionId]);
 
   const cardRenderer = useCallback(
     (s: AdminSession) => (
@@ -284,9 +376,26 @@ export default function SessionManagementPage() {
         <div className="space-y-2">
           <div className="flex items-start justify-between">
             <div>
-              <p className="text-text-primary font-medium">
-                {s.user.firstName} {s.user.lastName}
-              </p>
+              <div className="flex items-center gap-2">
+                <p className="text-text-primary font-medium">
+                  {s.user.firstName} {s.user.lastName}
+                </p>
+                {viewMode === "active" && s.token === currentSessionId && (
+                  <Badge variant="success" size="sm">
+                    This session
+                  </Badge>
+                )}
+                {viewMode === "history" &&
+                  (s.revokedAt ? (
+                    <Badge variant="danger" size="sm">
+                      Logged out
+                    </Badge>
+                  ) : (
+                    <Badge variant="warning" size="sm">
+                      Idle timeout
+                    </Badge>
+                  ))}
+              </div>
               <p className="text-text-muted font-mono text-xs">{s.user.employeeId}</p>
             </div>
             <Badge variant={ROLE_BADGE_VARIANT[s.user.role] ?? "default"}>
@@ -298,31 +407,36 @@ export default function SessionManagementPage() {
               Device: <span className="font-mono">{s.deviceId.slice(0, 16)}…</span>
             </div>
             <div>IP: {s.ipAddress ?? "—"}</div>
+            {viewMode === "history" && (
+              <div>Ended: {formatDateTime(s.revokedAt ?? s.lastActiveAt)}</div>
+            )}
           </div>
           <div className="border-border-default flex items-center justify-between border-t pt-2 text-xs">
             <span className="text-text-muted">{relativeTime(s.lastActiveAt)}</span>
-            <div className="flex gap-1">
-              <Tooltip content="Revoke">
-                <IconButton
-                  icon={Trash2}
-                  aria-label="Revoke"
-                  size="sm"
-                  variant="danger"
-                  onClick={() =>
-                    setConfirmAction({
-                      type: "revoke",
-                      id: s.id,
-                      userName: `${s.user.firstName} ${s.user.lastName}`,
-                    })
-                  }
-                />
-              </Tooltip>
-            </div>
+            {viewMode === "active" && (
+              <div className="flex gap-1">
+                <Tooltip content="Revoke">
+                  <IconButton
+                    icon={Trash2}
+                    aria-label="Revoke"
+                    size="sm"
+                    variant="danger"
+                    onClick={() =>
+                      setConfirmAction({
+                        type: "revoke",
+                        id: s.id,
+                        userName: `${s.user.firstName} ${s.user.lastName}`,
+                      })
+                    }
+                  />
+                </Tooltip>
+              </div>
+            )}
           </div>
         </div>
       </Card>
     ),
-    [],
+    [currentSessionId, viewMode],
   );
 
   const sessionDetailRenderer = useCallback(
@@ -361,17 +475,19 @@ export default function SessionManagementPage() {
       <PageHeader
         title="Session Management"
         actions={
-          <Button
-            variant="danger"
-            leftIcon={Trash2}
-            onClick={() => setConfirmAction({ type: "revokeAll" })}
-          >
-            Revoke All Sessions
-          </Button>
+          viewMode === "active" ? (
+            <Button
+              variant="danger"
+              leftIcon={Trash2}
+              onClick={() => setConfirmAction({ type: "revokeAll" })}
+            >
+              Revoke All Other Sessions
+            </Button>
+          ) : undefined
         }
       />
 
-      {/* Summary Cards */}
+      {/* Summary Cards — global counts (not affected by the role tab) */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <Card padding="sm">
           <div className="flex items-center gap-3">
@@ -386,27 +502,72 @@ export default function SessionManagementPage() {
         </Card>
         <Card padding="sm">
           <div className="flex items-center gap-3">
-            <div className="bg-success-100 flex h-10 w-10 items-center justify-center rounded-lg">
-              <Users size={18} className="text-success-600" />
+            <div className="bg-warning-100 flex h-10 w-10 items-center justify-center rounded-lg">
+              <ShieldCheck size={18} className="text-warning-600" />
             </div>
             <div>
-              <p className="text-text-muted text-xs">Recruiters Online</p>
-              <p className="text-success-600 text-xl font-bold">{recruitersOnline}</p>
+              <p className="text-text-muted text-xs">Admins Online</p>
+              <p className="text-warning-600 text-xl font-bold">{adminsOnline}</p>
             </div>
           </div>
         </Card>
         <Card padding="sm">
           <div className="flex items-center gap-3">
-            <div className="bg-warning-100 flex h-10 w-10 items-center justify-center rounded-lg">
-              <ShieldCheck size={18} className="text-warning-600" />
+            <div className="bg-success-100 flex h-10 w-10 items-center justify-center rounded-lg">
+              <Users size={18} className="text-success-600" />
             </div>
             <div>
-              <p className="text-text-muted text-xs">Managers Online</p>
-              <p className="text-warning-600 text-xl font-bold">{managersOnline}</p>
+              <p className="text-text-muted text-xs">Employees Online</p>
+              <p className="text-success-600 text-xl font-bold">{employeesOnline}</p>
             </div>
           </div>
         </Card>
       </div>
+
+      {/* View tabs — Active (currently online) vs History (logged-out / idled-out) */}
+      <Tabs
+        tabs={[
+          { id: "active", label: "Active", icon: Monitor },
+          { id: "history", label: "History", icon: History },
+        ]}
+        activeTab={viewMode}
+        onChange={(tabId) => {
+          setViewModeRaw(tabId as SessionView);
+          setPage(1);
+          setSelectedIds(new Set());
+          setSortKey("");
+        }}
+        variant="pills"
+      />
+
+      {/* Role tabs — splits admin sessions from employee sessions */}
+      <Tabs
+        tabs={[
+          {
+            id: "",
+            label: "All",
+            ...(viewMode === "active" ? { badge: summary.total } : {}),
+          },
+          {
+            id: "ADMIN",
+            label: "Admins",
+            ...(viewMode === "active" ? { badge: summary.admins } : {}),
+          },
+          {
+            id: "EMPLOYEE",
+            label: "Employees",
+            ...(viewMode === "active"
+              ? { badge: summary.recruiters + summary.managers }
+              : {}),
+          },
+        ]}
+        activeTab={roleFilter}
+        onChange={(tabId) => {
+          setRoleFilterRaw(tabId as SessionRoleFilter);
+          setPage(1);
+          setSelectedIds(new Set());
+        }}
+      />
 
       {/* Filter */}
       <div className="flex flex-wrap items-center gap-3">
@@ -437,9 +598,13 @@ export default function SessionManagementPage() {
         columns={columns}
         data={sortedSessions}
         loading={isLoading}
-        emptyIcon={Monitor}
-        emptyTitle="No active sessions"
-        emptyDescription="There are no active sessions matching your criteria."
+        emptyIcon={viewMode === "history" ? History : Monitor}
+        emptyTitle={viewMode === "history" ? "No past sessions" : "No active sessions"}
+        emptyDescription={
+          viewMode === "history"
+            ? "No sessions have ended yet for the current filter."
+            : "There are no active sessions matching your criteria."
+        }
         sortKey={sortKey}
         sortDir={sortDir}
         onSort={handleSort}
@@ -459,6 +624,25 @@ export default function SessionManagementPage() {
         detailRenderer={sessionDetailRenderer}
         detailTitle={(s) => `${s.user.firstName} ${s.user.lastName}`}
         enableKeyboardNav
+        // Selection + bulk actions — only in active view. History
+        // rows are already terminated, so revoke would be a no-op.
+        {...(viewMode === "active"
+          ? {
+              selectable: true as const,
+              selectedIds,
+              onSelectionChange: setSelectedIds,
+              getRowId: (s: AdminSession) => s.id,
+              bulkActions: [
+                {
+                  label: "Revoke Selected",
+                  icon: Trash2,
+                  variant: "danger" as const,
+                  onClick: (ids: Set<string>) =>
+                    setConfirmAction({ type: "bulkRevoke", ids: new Set(ids) }),
+                },
+              ],
+            }
+          : {})}
       />
 
       {/* Confirm Dialog */}
@@ -468,17 +652,24 @@ export default function SessionManagementPage() {
         onConfirm={handleConfirmAction}
         title={
           confirmAction?.type === "revokeAll"
-            ? "Revoke All Sessions"
+            ? "Revoke All Other Sessions"
             : confirmAction?.type === "revokeUser"
               ? "Revoke User Sessions"
-              : "Revoke Session"
+              : confirmAction?.type === "bulkRevoke"
+                ? "Revoke Selected Sessions"
+                : "Revoke Session"
         }
         description={
           confirmAction?.type === "revokeAll"
-            ? "Are you sure you want to revoke ALL active sessions? All users will be logged out."
+            ? "This will log out every user (admins and employees) except you. " +
+              "Your own session will stay active. Continue?"
             : confirmAction?.type === "revokeUser"
               ? `Are you sure you want to revoke all sessions for ${confirmAction.userName}?`
-              : `Are you sure you want to revoke this session for ${confirmAction?.userName}?`
+              : confirmAction?.type === "bulkRevoke"
+                ? `Are you sure you want to revoke ${confirmAction.ids?.size ?? 0} selected session${
+                    (confirmAction.ids?.size ?? 0) === 1 ? "" : "s"
+                  }? Affected users will be logged out.`
+                : `Are you sure you want to revoke this session for ${confirmAction?.userName}?`
         }
         confirmLabel="Revoke"
         variant="danger"

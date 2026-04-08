@@ -5,6 +5,17 @@ import { Search, Users, Building2, Briefcase, UserCheck, Shield, Loader2 } from 
 import { useSearchParams, useRouter } from "next/navigation";
 import { globalSearch, type SearchResult } from "@/services/search.service";
 import { PageHeader, SearchInput, Card, Badge, Tabs, EmptyState } from "@/components/ui";
+import { useTabSearchParam } from "@/hooks";
+
+const SEARCH_TYPE_IDS = [
+  "all",
+  "candidate",
+  "company",
+  "serviceprovider",
+  "hrmanager",
+  "user",
+] as const;
+type SearchTypeId = (typeof SEARCH_TYPE_IDS)[number];
 
 const TYPE_META: Record<string, { label: string; icon: typeof Users; color: string }> = {
   candidate: { label: "Candidates", icon: Users, color: "text-primary-500" },
@@ -27,29 +38,36 @@ export default function SearchPage() {
   const [results, setResults] = useState<Record<string, SearchResult[]>>({});
   const [totalCount, setTotalCount] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
-  const [activeType, setActiveType] = useState("all");
+  const [activeType, setActiveType] = useTabSearchParam<SearchTypeId>(
+    "type",
+    "all",
+    SEARCH_TYPE_IDS,
+  );
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 20;
 
-  const doSearch = useCallback(async (q: string) => {
-    if (q.length < 2) {
-      setResults({});
-      setTotalCount(0);
-      return;
-    }
-    setIsLoading(true);
-    try {
-      const res = await globalSearch(q, undefined, 200);
-      setResults(res.results);
-      setTotalCount(res.totalCount);
-      setActiveType("all");
-      setPage(1);
-    } catch {
-      /* silent */
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
+  const doSearch = useCallback(
+    async (q: string) => {
+      if (q.length < 2) {
+        setResults({});
+        setTotalCount(0);
+        return;
+      }
+      setIsLoading(true);
+      try {
+        const res = await globalSearch(q, undefined, 200);
+        setResults(res.results);
+        setTotalCount(res.totalCount);
+        setActiveType("all");
+        setPage(1);
+      } catch {
+        /* silent */
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [setActiveType],
+  );
 
   useEffect(() => {
     if (initialQ) void doSearch(initialQ);
@@ -112,7 +130,7 @@ export default function SearchPage() {
               <Tabs
                 tabs={tabs}
                 activeTab={activeType}
-                onChange={setActiveType}
+                onChange={(id) => setActiveType(id as SearchTypeId)}
                 variant="pills"
                 size="sm"
               />

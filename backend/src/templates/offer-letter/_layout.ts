@@ -8,7 +8,7 @@ import type PDFDocument from "pdfkit";
 export const PAGE_MARGIN = 60;
 export const FONT_SIZE_TITLE = 20;
 export const FONT_SIZE_HEADING = 14;
-export const FONT_SIZE_BODY = 11;
+export const FONT_SIZE_BODY = 10;
 export const LINE_GAP = 4;
 export const SECTION_GAP = 18;
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { useUnsavedChanges } from "@/hooks/use-unsaved-changes";
@@ -15,6 +16,7 @@ import {
   Card,
   FormField,
   Input,
+  PhoneInput,
   Select,
   Textarea,
   Button,
@@ -108,31 +110,65 @@ export default function AddReportPage() {
     });
   }, [reset]);
 
-  // §23.19 — Load dropdown options when zone is selected
+  // §23.19 — Load dropdown options once a zone is picked. We fetch the full
+  // lists; the zone/state cascade is handled client-side via the memos below.
+  // (`selectedZone` only gates the initial fetch so the dropdowns don't run
+  // before the recruiter has chosen a candidate zone.)
+  const dropdownsQuery = useQuery({
+    queryKey: ["new-report-dropdowns"] as const,
+    enabled: !!selectedZone,
+    staleTime: 5 * 60 * 1000,
+    queryFn: async () => {
+      const [states, locations, profiles, qualifications, noticePeriods, diplomas] =
+        await Promise.all([
+          getDropdownOptions("STATE").catch(() => [] as DropdownOption[]),
+          getDropdownOptions("LOCATION").catch(() => [] as DropdownOption[]),
+          getDropdownOptions("PROFILE").catch(() => [] as DropdownOption[]),
+          getDropdownOptions("QUALIFICATION").catch(() => [] as DropdownOption[]),
+          getDropdownOptions("NOTICE_PERIOD").catch(() => [] as DropdownOption[]),
+          getDropdownOptions("DIPLOMA").catch(() => [] as DropdownOption[]),
+        ]);
+      return { states, locations, profiles, qualifications, noticePeriods, diplomas };
+    },
+  });
   useEffect(() => {
-    if (!selectedZone) return;
-    const zoneSet = isSetA(selectedZone) ? "SET_A" : "SET_B";
-    void Promise.all([
-      getDropdownOptions("STATE", zoneSet)
-        .then(setStateOptions)
-        .catch(() => {}),
-      getDropdownOptions("LOCATION", zoneSet)
-        .then(setLocationOptions)
-        .catch(() => {}),
-      getDropdownOptions("PROFILE", zoneSet)
-        .then(setProfileOptions)
-        .catch(() => {}),
-      getDropdownOptions("QUALIFICATION", zoneSet)
-        .then(setQualificationOptions)
-        .catch(() => {}),
-      getDropdownOptions("NOTICE_PERIOD", zoneSet)
-        .then(setNoticePeriodOptions)
-        .catch(() => {}),
-      getDropdownOptions("DIPLOMA", zoneSet)
-        .then(setDiplomaOptions)
-        .catch(() => {}),
-    ]);
-  }, [selectedZone]);
+    if (dropdownsQuery.data) {
+      setStateOptions(dropdownsQuery.data.states);
+      setLocationOptions(dropdownsQuery.data.locations);
+      setProfileOptions(dropdownsQuery.data.profiles);
+      setQualificationOptions(dropdownsQuery.data.qualifications);
+      setNoticePeriodOptions(dropdownsQuery.data.noticePeriods);
+      setDiplomaOptions(dropdownsQuery.data.diplomas);
+    }
+  }, [dropdownsQuery.data]);
+
+  // §23.19 — Cascade: only show states whose `zone` matches the candidate
+  // zone the recruiter picked, then only show locations whose `parentId`
+  // matches the currently-selected state. The form value for `state` is the
+  // dropdown row's `value` (e.g. "maharashtra"), so we resolve back to its id.
+  const watchedState = watch("state") as string | undefined;
+  const filteredStates = useMemo(
+    () => (selectedZone ? stateOptions.filter((s) => s.zone === selectedZone) : []),
+    [stateOptions, selectedZone],
+  );
+  const selectedStateId = useMemo(
+    () => stateOptions.find((s) => s.value === watchedState)?.id ?? null,
+    [stateOptions, watchedState],
+  );
+  const filteredLocations = useMemo(
+    () =>
+      selectedStateId
+        ? locationOptions.filter((l) => l.parentId === selectedStateId)
+        : [],
+    [locationOptions, selectedStateId],
+  );
+
+  // Clear the location field when the state changes so a stale selection
+  // from a different state can't survive into the submission.
+  useEffect(() => {
+    setValue("location", "", { shouldValidate: false, shouldDirty: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedStateId]);
 
   // Auto-save every 30 seconds
   useEffect(() => {
@@ -312,42 +348,60 @@ export default function AddReportPage() {
                 <Input {...register("candidateName")} onBlur={handleFieldBlur} />
               </FormField>
               <FormField label="Contact No" htmlFor="contactNo">
-                <Input type="tel" {...register("contactNo")} onBlur={handleFieldBlur} />
+                <PhoneInput
+                  id="contactNo"
+                  value={(watch("contactNo") as string) ?? ""}
+                  onChange={(v) =>
+                    setValue("contactNo", v, { shouldDirty: true, shouldValidate: true })
+                  }
+                  onBlur={handleFieldBlur}
+                />
               </FormField>
               <FormField label="Email ID" htmlFor="emailId">
                 <Input type="email" {...register("emailId")} onBlur={handleFieldBlur} />
               </FormField>
-              {/* §23.19 — State from dropdown service */}
+              {/* §23.19 — State filtered to the candidate's zone */}
               <FormField label="State" htmlFor="state">
-                {stateOptions.length > 0 ? (
+                {filteredStates.length > 0 ? (
                   <Select
                     {...register("state")}
                     onBlur={handleFieldBlur}
                     placeholder="Select state..."
-                    options={toSelectOptions(stateOptions)}
+                    options={toSelectOptions(filteredStates)}
+                    searchable
                   />
                 ) : (
                   <Input
                     {...register("state")}
                     onBlur={handleFieldBlur}
-                    placeholder="Type or loading..."
+                    placeholder={
+                      stateOptions.length === 0
+                        ? "Loading..."
+                        : "No states configured for this zone"
+                    }
                   />
                 )}
               </FormField>
-              {/* §23.19 — Location from dropdown service */}
+              {/* §23.19 — Location cascades from the selected state */}
               <FormField label="Location" htmlFor="location">
-                {locationOptions.length > 0 ? (
+                {filteredLocations.length > 0 ? (
                   <Select
                     {...register("location")}
                     onBlur={handleFieldBlur}
                     placeholder="Select location..."
-                    options={toSelectOptions(locationOptions)}
+                    options={toSelectOptions(filteredLocations)}
+                    searchable
                   />
                 ) : (
                   <Input
                     {...register("location")}
                     onBlur={handleFieldBlur}
-                    placeholder="Type or loading..."
+                    disabled={!selectedStateId}
+                    placeholder={
+                      !selectedStateId
+                        ? "Pick a state first"
+                        : "No locations configured for this state"
+                    }
                   />
                 )}
               </FormField>
@@ -475,6 +529,7 @@ export default function AddReportPage() {
                     onBlur={handleFieldBlur}
                     placeholder="Select profile..."
                     options={toSelectOptions(profileOptions)}
+                    searchable
                   />
                 ) : (
                   <Input {...register("profile")} onBlur={handleFieldBlur} />

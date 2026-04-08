@@ -90,17 +90,19 @@ export const env = {
   // ── Session ──
   SESSION_SECRET: optional("SESSION_SECRET", ""),
   SESSION_MAX_AGE: optionalInt("SESSION_MAX_AGE", 86400000),
-  /** §4: Idle timeout in minutes. Default 30 min. Every API request resets TTL. */
+  /** §4: Idle timeout in minutes for non-admin users. Default 30 min. Every API request resets TTL. */
   SESSION_IDLE_TIMEOUT_MINUTES: optionalInt("SESSION_IDLE_TIMEOUT_MINUTES", 30),
-  /** @deprecated Use SESSION_IDLE_TIMEOUT_MINUTES. Kept for backward compat. */
-  SESSION_TIMEOUT_HOURS: optionalInt("SESSION_TIMEOUT_HOURS", 24),
-  MAX_SESSIONS_PER_USER: optionalInt("MAX_SESSIONS_PER_USER", 5),
+  /** Idle timeout in minutes for admin only. Default 4320 min (3 days). */
+  ADMIN_SESSION_IDLE_TIMEOUT_MINUTES: optionalInt(
+    "ADMIN_SESSION_IDLE_TIMEOUT_MINUTES",
+    3 * 24 * 60,
+  ),
 
   // ── Auth Security ──
   MAX_LOGIN_ATTEMPTS: optionalInt("MAX_LOGIN_ATTEMPTS", 5),
   ACCOUNT_LOCK_DURATION_MINUTES: optionalInt("ACCOUNT_LOCK_DURATION_MINUTES", 15),
   AUTH_RATE_LIMIT_WINDOW_MS: optionalInt("AUTH_RATE_LIMIT_WINDOW_MS", 60000), // §16: 1 min window
-  AUTH_RATE_LIMIT_MAX_ATTEMPTS: optionalInt("AUTH_RATE_LIMIT_MAX_ATTEMPTS", 5), // §16: 5 attempts/min/IP
+  AUTH_RATE_LIMIT_MAX_ATTEMPTS: optionalInt("AUTH_RATE_LIMIT_MAX_ATTEMPTS", 20), // §16: 20 attempts/min/IP across all identifiers
 
   // ── Password Policy ──
   PASSWORD_MIN_LENGTH: optionalInt("PASSWORD_MIN_LENGTH", 8),

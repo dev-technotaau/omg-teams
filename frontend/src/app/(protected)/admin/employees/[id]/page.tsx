@@ -14,9 +14,19 @@ import {
   EyeOff,
   Copy,
   Pencil,
+  LogOut,
+  MoreVertical,
 } from "lucide-react";
+import {
+  GodviewTab,
+  GODVIEW_TAB_ITEMS,
+  GODVIEW_TAB_IDS,
+  type GodviewTabId,
+} from "./godview-tabs";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
+import { useQuery } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
 import {
   PageHeader,
   Card,
@@ -32,11 +42,24 @@ import {
   Modal,
   FormField,
   Input,
+  PhoneInput,
   Select,
   Textarea,
 } from "@/components/ui";
-import { updateUser as updateUserApi } from "@/services/user.service";
+import {
+  updateUser as updateUserApi,
+  suspendUser,
+  reactivateUser,
+  deleteUser as deleteUserApi,
+  resetPassword as resetPasswordApi,
+  resetDevice as resetDeviceApi,
+  unlockAccount as unlockAccountApi,
+  generateBackupCodes as generateBackupCodesApi,
+  assignManager as assignManagerApi,
+  removeManager as removeManagerApi,
+} from "@/services/user.service";
 import type { Column } from "@/components/ui";
+import { useTabSearchParam } from "@/hooks";
 
 // ──────────────────────────────────────────────
 //  Employee Detail — Spec Section 6.4
@@ -116,7 +139,22 @@ const TAB_ITEMS = [
   { id: "leave", label: "Leave", icon: CalendarDays },
   { id: "documents", label: "Documents", icon: FileText },
   { id: "reports", label: "Reports", icon: FolderOpen },
+  ...GODVIEW_TAB_ITEMS,
 ];
+
+const GODVIEW_TAB_ID_SET = new Set<string>(GODVIEW_TAB_IDS);
+
+// All valid tab ids — base 6 + godview ids — for ?tab= URL sync.
+const ALL_TAB_IDS = [
+  "profile",
+  "performance",
+  "attendance",
+  "leave",
+  "documents",
+  "reports",
+  ...GODVIEW_TAB_IDS,
+] as const;
+type EmployeeTabId = (typeof ALL_TAB_IDS)[number];
 
 export default function EmployeeDetailPage() {
   const params = useParams();
@@ -124,7 +162,12 @@ export default function EmployeeDetailPage() {
   const employeeId = params.id as string;
 
   const [employee, setEmployee] = useState<EmployeeDetail | null>(null);
-  const [activeTab, setActiveTab] = useState("profile");
+  // Active tab persisted in ?tab= so it survives reloads + back/forward
+  const [activeTab, setActiveTab] = useTabSearchParam<EmployeeTabId>(
+    "tab",
+    "profile",
+    ALL_TAB_IDS,
+  );
   const [isLoading, setIsLoading] = useState(true);
 
   // Tab data
@@ -263,20 +306,26 @@ export default function EmployeeDetailPage() {
     };
   }, []);
 
+  // Server state — employee detail. We sync the cached row into local state
+  // so the rest of the page (which mutates `employee` directly through
+  // many setEmployee call sites) keeps working unchanged.
+  const employeeQuery = useQuery({
+    queryKey: qk.employees.detail(employeeId),
+    queryFn: async () => {
+      const res = await api.get<{ user: EmployeeDetail }>(`/users/${employeeId}`);
+      return res.data.user;
+    },
+  });
   useEffect(() => {
-    const fetchEmployee = async () => {
-      try {
-        const res = await api.get<{ user: EmployeeDetail }>(`/users/${employeeId}`);
-        setEmployee(res.data.user);
-      } catch {
-        toast.error("Failed to load employee");
-        router.push("/admin/employees");
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    void fetchEmployee();
-  }, [employeeId, router]);
+    if (employeeQuery.data) {
+      setEmployee(employeeQuery.data);
+      setIsLoading(false);
+    }
+    if (employeeQuery.isError) {
+      toast.error("Failed to load employee");
+      router.push("/admin/employees");
+    }
+  }, [employeeQuery.data, employeeQuery.isError, router]);
 
   const fetchTabData = useCallback(
     async (tab: string) => {
@@ -322,10 +371,272 @@ export default function EmployeeDetailPage() {
   );
 
   useEffect(() => {
-    if (activeTab !== "profile" && activeTab !== "performance") {
+    if (
+      activeTab !== "profile" &&
+      activeTab !== "performance" &&
+      !GODVIEW_TAB_ID_SET.has(activeTab)
+    ) {
       void fetchTabData(activeTab);
     }
   }, [activeTab, fetchTabData]);
+
+  // §Godview — presence (online/offline) polling + godview summary
+  const [presence, setPresence] = useState<{
+    status: "online" | "idle" | "offline";
+    lastActiveAt: string | null;
+  } | null>(null);
+  const presenceQuery = useQuery({
+    queryKey: ["presence", employeeId] as const,
+    queryFn: async () => {
+      const res = await api.get<{
+        status: "online" | "idle" | "offline";
+        lastActiveAt: string | null;
+      }>(`/users/${employeeId}/presence`);
+      return res.data;
+    },
+    refetchInterval: 30_000,
+  });
+  useEffect(() => {
+    if (presenceQuery.data) setPresence(presenceQuery.data);
+  }, [presenceQuery.data]);
+
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const closeActions = () => setActionsOpen(false);
+  const refreshEmployee = async () => {
+    try {
+      const res = await api.get<{ user: EmployeeDetail }>(`/users/${employeeId}`);
+      setEmployee(res.data.user);
+    } catch {
+      /* silent */
+    }
+  };
+
+  const handleForceLogout = async () => {
+    if (!confirm("Force-logout this employee from all sessions?")) return;
+    try {
+      const res = await api.post<{ revoked: number }>(`/users/${employeeId}/force-logout`, {});
+      toast.success(`${res.data.revoked} session(s) revoked`);
+      closeActions();
+    } catch {
+      toast.error("Failed to force logout");
+    }
+  };
+
+  const handleSuspend = async () => {
+    if (!confirm("Suspend this employee? They will be unable to log in.")) return;
+    try {
+      await suspendUser(employeeId);
+      toast.success("Employee suspended");
+      await refreshEmployee();
+      closeActions();
+    } catch {
+      toast.error("Failed to suspend");
+    }
+  };
+
+  const handleReactivate = async () => {
+    try {
+      await reactivateUser(employeeId);
+      toast.success("Employee reactivated");
+      await refreshEmployee();
+      closeActions();
+    } catch {
+      toast.error("Failed to reactivate");
+    }
+  };
+
+  const handleResetPassword = async () => {
+    const pw = prompt("Enter new password (min 8 characters):");
+    if (!pw) return;
+    if (pw.length < 8) {
+      toast.error("Password must be at least 8 characters");
+      return;
+    }
+    try {
+      await resetPasswordApi(employeeId, pw);
+      toast.success("Password reset");
+      closeActions();
+    } catch {
+      toast.error("Failed to reset password");
+    }
+  };
+
+  const handleResetDevice = async () => {
+    if (!confirm("Reset the device binding for this employee?")) return;
+    try {
+      await resetDeviceApi(employeeId);
+      toast.success("Device reset");
+      await refreshEmployee();
+      closeActions();
+    } catch {
+      toast.error("Failed to reset device");
+    }
+  };
+
+  const handleReactivateWithDeviceReset = async () => {
+    if (!confirm("Reactivate this employee AND reset their device binding?")) return;
+    try {
+      await api.post(`/users/${employeeId}/reactivate-with-device-reset`, {});
+      toast.success("Reactivated with device reset");
+      await refreshEmployee();
+      closeActions();
+    } catch {
+      toast.error("Failed to reactivate with device reset");
+    }
+  };
+
+  const handleUnlock = async () => {
+    try {
+      await unlockAccountApi(employeeId);
+      toast.success("Account unlocked");
+      closeActions();
+    } catch {
+      toast.error("Failed to unlock");
+    }
+  };
+
+  // §Godview — Manager/Recruiter assignment modal
+  // mode: "assign-manager"    = add an RM to this recruiter
+  //       "remove-manager"    = remove an RM from this recruiter
+  //       "assign-recruiter"  = add a recruiter under this RM
+  //       "remove-recruiter"  = remove a recruiter from this RM
+  const [assignmentModal, setAssignmentModal] = useState<
+    null | "assign-manager" | "remove-manager" | "assign-recruiter" | "remove-recruiter"
+  >(null);
+  const [assignmentOptions, setAssignmentOptions] = useState<
+    Array<{ id: string; firstName: string; lastName: string; employeeId: string | null }>
+  >([]);
+  const [assignmentLoading, setAssignmentLoading] = useState(false);
+  const [assignmentSelected, setAssignmentSelected] = useState<string>("");
+
+  const openAssignmentModal = async (
+    mode: "assign-manager" | "remove-manager" | "assign-recruiter" | "remove-recruiter",
+  ) => {
+    setAssignmentModal(mode);
+    setAssignmentSelected("");
+    closeActions();
+    setAssignmentLoading(true);
+    try {
+      if (mode === "assign-manager") {
+        // All active RMs not already assigned to this recruiter
+        const res = await api.get<{
+          data: Array<{ id: string; firstName: string; lastName: string; employeeId: string | null }>;
+        }>("/users?role=REPORTING_MANAGER&status=ACTIVE&limit=500");
+        const assignedIds = new Set((employee?.managers ?? []).map((m) => m.manager.id));
+        setAssignmentOptions((res.data.data ?? []).filter((u) => !assignedIds.has(u.id)));
+      } else if (mode === "remove-manager") {
+        setAssignmentOptions(
+          (employee?.managers ?? []).map((m) => ({
+            id: m.manager.id,
+            firstName: m.manager.firstName,
+            lastName: m.manager.lastName,
+            employeeId: null,
+          })),
+        );
+      } else if (mode === "assign-recruiter") {
+        const res = await api.get<{
+          data: Array<{ id: string; firstName: string; lastName: string; employeeId: string | null }>;
+        }>("/users?role=RECRUITER&status=ACTIVE&limit=500");
+        const assignedIds = new Set(
+          (employee?.managedRecruiters ?? []).map((r) => r.recruiter.id),
+        );
+        setAssignmentOptions((res.data.data ?? []).filter((u) => !assignedIds.has(u.id)));
+      } else {
+        // remove-recruiter
+        setAssignmentOptions(
+          (employee?.managedRecruiters ?? []).map((r) => ({
+            id: r.recruiter.id,
+            firstName: r.recruiter.firstName,
+            lastName: r.recruiter.lastName,
+            employeeId: null,
+          })),
+        );
+      }
+    } catch {
+      toast.error("Failed to load options");
+    } finally {
+      setAssignmentLoading(false);
+    }
+  };
+
+  const submitAssignment = async () => {
+    if (!assignmentSelected || !assignmentModal) return;
+    try {
+      if (assignmentModal === "assign-manager") {
+        await assignManagerApi(employeeId, assignmentSelected);
+        toast.success("Manager assigned");
+      } else if (assignmentModal === "remove-manager") {
+        await removeManagerApi(employeeId, assignmentSelected);
+        toast.success("Manager removed");
+      } else if (assignmentModal === "assign-recruiter") {
+        // For RM-side assignment, the relation is still recruiter→manager,
+        // so we call assign with recruiterId=selected, managerId=current employee.
+        await assignManagerApi(assignmentSelected, employeeId);
+        toast.success("Recruiter assigned");
+      } else {
+        await removeManagerApi(assignmentSelected, employeeId);
+        toast.success("Recruiter removed");
+      }
+      await refreshEmployee();
+      setAssignmentModal(null);
+    } catch {
+      toast.error("Failed to update assignment");
+    }
+  };
+
+  const handleGenerateBackupCodes = async () => {
+    if (!confirm("Generate new backup codes? Old codes will be invalidated.")) return;
+    try {
+      const { codes } = await generateBackupCodesApi(employeeId);
+      alert(`New backup codes (store securely):\n\n${codes.join("\n")}`);
+      closeActions();
+    } catch {
+      toast.error("Failed to generate backup codes");
+    }
+  };
+
+  const handleResetMfa = async () => {
+    if (
+      !confirm(
+        "Reset MFA? All WebAuthn credentials and backup codes will be deleted. User will need to re-enroll.",
+      )
+    )
+      return;
+    try {
+      const res = await api.post<{ webauthn: number; backup: number }>(
+        `/users/${employeeId}/reset-mfa`,
+        {},
+      );
+      toast.success(
+        `MFA reset: ${res.data.webauthn} credential(s) and ${res.data.backup} backup code(s) removed`,
+      );
+      closeActions();
+    } catch {
+      toast.error("Failed to reset MFA");
+    }
+  };
+
+  const handleDelete = async () => {
+    if (
+      !confirm(
+        "PERMANENTLY delete this employee? This cannot be undone. All related records will be cascade-deleted.",
+      )
+    )
+      return;
+    if (!confirm("Are you absolutely sure? Type the employee name to confirm in the next step.")) return;
+    const typed = prompt(`Type "${employee?.firstName} ${employee?.lastName}" to confirm:`);
+    if (typed !== `${employee?.firstName} ${employee?.lastName}`) {
+      toast.error("Confirmation mismatch, cancelled");
+      return;
+    }
+    try {
+      await deleteUserApi(employeeId);
+      toast.success("Employee deleted");
+      router.push("/admin/employees");
+    } catch {
+      toast.error("Failed to delete");
+    }
+  };
 
   if (isLoading) return <TableSkeleton />;
   if (!employee) return null;
@@ -473,13 +784,163 @@ export default function EmployeeDetailPage() {
       <PageHeader
         title={name}
         actions={
-          <Button
-            variant="outline"
-            leftIcon={ArrowLeft}
-            onClick={() => router.push("/admin/employees")}
-          >
-            Back
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              leftIcon={ArrowLeft}
+              onClick={() => router.push("/admin/employees")}
+            >
+              Back
+            </Button>
+            {/* §Godview — consolidated admin actions */}
+            <div className="relative">
+              <Button
+                variant="outline"
+                leftIcon={MoreVertical}
+                onClick={() => setActionsOpen((v) => !v)}
+              >
+                Actions
+              </Button>
+              {actionsOpen && (
+                <div
+                  className="border-border-default bg-bg-surface-raised absolute right-0 z-20 mt-2 w-64 divide-y divide-border-default rounded-lg border shadow-xl"
+                  onMouseLeave={() => setActionsOpen(false)}
+                >
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        closeActions();
+                        openEditModal();
+                      }}
+                      className="hover:bg-bg-hover flex w-full items-center gap-2 px-3 py-2 text-sm"
+                    >
+                      <Pencil size={14} /> Edit Profile
+                    </button>
+                  </div>
+                  <div>
+                    {employee.status === "ACTIVE" ? (
+                      <button
+                        type="button"
+                        onClick={() => void handleSuspend()}
+                        className="hover:bg-bg-hover flex w-full items-center gap-2 px-3 py-2 text-sm text-warning-600"
+                      >
+                        Suspend Employee
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => void handleReactivate()}
+                        className="hover:bg-bg-hover flex w-full items-center gap-2 px-3 py-2 text-sm text-success-600"
+                      >
+                        Reactivate Employee
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => void handleReactivateWithDeviceReset()}
+                      className="hover:bg-bg-hover flex w-full items-center gap-2 px-3 py-2 text-sm"
+                    >
+                      Reactivate + Reset Device
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleUnlock()}
+                      className="hover:bg-bg-hover flex w-full items-center gap-2 px-3 py-2 text-sm"
+                    >
+                      Unlock Account
+                    </button>
+                  </div>
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => void handleResetPassword()}
+                      className="hover:bg-bg-hover flex w-full items-center gap-2 px-3 py-2 text-sm"
+                    >
+                      Reset Password
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleResetDevice()}
+                      className="hover:bg-bg-hover flex w-full items-center gap-2 px-3 py-2 text-sm"
+                    >
+                      Reset Device
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleGenerateBackupCodes()}
+                      className="hover:bg-bg-hover flex w-full items-center gap-2 px-3 py-2 text-sm"
+                    >
+                      Generate Backup Codes
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleResetMfa()}
+                      className="hover:bg-bg-hover flex w-full items-center gap-2 px-3 py-2 text-sm"
+                    >
+                      Reset MFA
+                    </button>
+                  </div>
+                  <div>
+                    {employee.role === "RECRUITER" && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => void openAssignmentModal("assign-manager")}
+                          className="hover:bg-bg-hover flex w-full items-center gap-2 px-3 py-2 text-sm"
+                        >
+                          Assign Reporting Manager
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void openAssignmentModal("remove-manager")}
+                          className="hover:bg-bg-hover flex w-full items-center gap-2 px-3 py-2 text-sm"
+                          disabled={!employee.managers?.length}
+                        >
+                          Remove Reporting Manager
+                        </button>
+                      </>
+                    )}
+                    {employee.role === "REPORTING_MANAGER" && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => void openAssignmentModal("assign-recruiter")}
+                          className="hover:bg-bg-hover flex w-full items-center gap-2 px-3 py-2 text-sm"
+                        >
+                          Assign Recruiter
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void openAssignmentModal("remove-recruiter")}
+                          className="hover:bg-bg-hover flex w-full items-center gap-2 px-3 py-2 text-sm"
+                          disabled={!employee.managedRecruiters?.length}
+                        >
+                          Remove Recruiter
+                        </button>
+                      </>
+                    )}
+                  </div>
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => void handleForceLogout()}
+                      className="hover:bg-bg-hover flex w-full items-center gap-2 px-3 py-2 text-sm text-error-600"
+                    >
+                      <LogOut size={14} /> Force Logout All Sessions
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleDelete()}
+                      className="hover:bg-bg-hover flex w-full items-center gap-2 px-3 py-2 text-sm text-error-600"
+                    >
+                      Delete Employee
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
         }
       />
 
@@ -498,6 +959,29 @@ export default function EmployeeDetailPage() {
               <Badge variant={employee.status === "ACTIVE" ? "success" : "danger"} dot>
                 {employee.status}
               </Badge>
+              {presence && (
+                <Badge
+                  variant={
+                    presence.status === "online"
+                      ? "success"
+                      : presence.status === "idle"
+                        ? "warning"
+                        : "default"
+                  }
+                  dot
+                >
+                  {presence.status === "online"
+                    ? "Online"
+                    : presence.status === "idle"
+                      ? "Idle"
+                      : "Offline"}
+                </Badge>
+              )}
+              {presence?.lastActiveAt && presence.status !== "online" && (
+                <span className="text-text-muted text-xs">
+                  Last active {new Date(presence.lastActiveAt).toLocaleString("en-IN")}
+                </span>
+              )}
             </div>
             <p className="text-text-muted text-sm">{employee.email}</p>
             <div className="text-text-secondary flex flex-wrap gap-3 text-xs">
@@ -535,7 +1019,7 @@ export default function EmployeeDetailPage() {
       <Tabs
         tabs={TAB_ITEMS.map((t) => ({ id: t.id, label: t.label }))}
         activeTab={activeTab}
-        onChange={setActiveTab}
+        onChange={(id) => setActiveTab(id as EmployeeTabId)}
       />
 
       {/* Tab Content */}
@@ -692,6 +1176,68 @@ export default function EmployeeDetailPage() {
         </div>
       )}
 
+      {/* §Godview — Assignment modal (assign/remove manager/recruiter) */}
+      <Modal
+        open={assignmentModal !== null}
+        onClose={() => setAssignmentModal(null)}
+        title={
+          assignmentModal === "assign-manager"
+            ? "Assign Reporting Manager"
+            : assignmentModal === "remove-manager"
+              ? "Remove Reporting Manager"
+              : assignmentModal === "assign-recruiter"
+                ? "Assign Recruiter"
+                : assignmentModal === "remove-recruiter"
+                  ? "Remove Recruiter"
+                  : ""
+        }
+        size="sm"
+      >
+        <div className="space-y-3">
+          {assignmentLoading ? (
+            <p className="text-text-muted text-sm">Loading options…</p>
+          ) : assignmentOptions.length === 0 ? (
+            <p className="text-text-muted text-sm">
+              {assignmentModal?.startsWith("remove")
+                ? "No current assignments to remove."
+                : "No eligible users available."}
+            </p>
+          ) : (
+            <FormField
+              label={
+                assignmentModal?.includes("manager") ? "Reporting Manager" : "Recruiter"
+              }
+              htmlFor="assignment-select"
+              required
+            >
+              <Select
+                id="assignment-select"
+                value={assignmentSelected}
+                onChange={(e) => setAssignmentSelected(e.target.value)}
+                options={[
+                  { value: "", label: "— Select —" },
+                  ...assignmentOptions.map((u) => ({
+                    value: u.id,
+                    label: `${u.firstName} ${u.lastName}${u.employeeId ? ` (${u.employeeId})` : ""}`,
+                  })),
+                ]}
+              />
+            </FormField>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setAssignmentModal(null)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void submitAssignment()}
+              disabled={!assignmentSelected || assignmentLoading}
+            >
+              Confirm
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
       {/* Admin Password Verification Modal — §6.3.3 */}
       <Modal
         open={showPwVerify}
@@ -758,11 +1304,10 @@ export default function EmployeeDetailPage() {
           </FormField>
 
           <FormField label="Mobile Number" htmlFor="edit-mobile">
-            <Input
+            <PhoneInput
               id="edit-mobile"
-              type="tel"
               value={editForm.mobileNumber}
-              onChange={(e) => setEditForm((f) => ({ ...f, mobileNumber: e.target.value }))}
+              onChange={(v) => setEditForm((f) => ({ ...f, mobileNumber: v }))}
               placeholder="Enter mobile number"
             />
           </FormField>
@@ -908,6 +1453,11 @@ export default function EmployeeDetailPage() {
             emptyDescription="No reports submitted by this employee."
           />
         ))}
+
+      {/* §Godview — new administrative tabs */}
+      {GODVIEW_TAB_ID_SET.has(activeTab) && (
+        <GodviewTab tab={activeTab as GodviewTabId} userId={employeeId} />
+      )}
     </div>
   );
 }

@@ -58,6 +58,13 @@ function buildCsp(nonce: string): string {
   ];
   if (cloudinaryCloud) imgSources.push(`https://res.cloudinary.com/${cloudinaryCloud}`);
   if (r2Url) imgSources.push(r2Url);
+  if (firebaseProjectId) {
+    imgSources.push(
+      "https://firebasestorage.googleapis.com",
+      "https://*.firebasestorage.googleapis.com",
+      "https://*.googleusercontent.com",
+    );
+  }
   if (gtmId || gaId)
     imgSources.push("https://www.google-analytics.com", "https://www.googletagmanager.com");
   if (fbPixelId) imgSources.push("https://www.facebook.com");
@@ -71,13 +78,29 @@ function buildCsp(nonce: string): string {
       "https://firebaseinstallations.googleapis.com",
       "https://firebaseremoteconfig.googleapis.com",
       "https://firebaselogging-pa.googleapis.com",
+      // Firestore (Listen/Write channels)
+      "https://firestore.googleapis.com",
+      "https://*.firestore.googleapis.com",
+      // Firebase Storage
+      "https://firebasestorage.googleapis.com",
+      "https://*.firebasestorage.googleapis.com",
+      // Identity / token refresh
+      "https://identitytoolkit.googleapis.com",
+      "https://securetoken.googleapis.com",
     );
   }
-  // Firebase Realtime Database
+  // Firebase Realtime Database — regional hosts (asia-southeast1 etc.)
+  // The configured URL only covers one host; the client may be redirected
+  // to a regional shard, so we whitelist the whole family.
   if (firebaseDbUrl) {
-    connectSources.push(firebaseDbUrl);
-    // RTDB also uses WebSocket
-    connectSources.push(firebaseDbUrl.replace("https://", "wss://"));
+    connectSources.push(
+      firebaseDbUrl,
+      firebaseDbUrl.replace("https://", "wss://"),
+      "https://*.firebaseio.com",
+      "wss://*.firebaseio.com",
+      "https://*.firebasedatabase.app",
+      "wss://*.firebasedatabase.app",
+    );
   }
   if (gtmId || gaId) {
     connectSources.push(
@@ -106,6 +129,13 @@ function buildCsp(nonce: string): string {
   frameSources.push("https://challenges.cloudflare.com"); // Turnstile CAPTCHA
   frameSources.push("https://vercel.live"); // Vercel preview toolbar
   if (gtmId) frameSources.push("https://www.googletagmanager.com");
+  // Firebase Realtime Database uses an iframe-based long-poll fallback
+  if (firebaseDbUrl) {
+    frameSources.push(
+      "https://*.firebaseio.com",
+      "https://*.firebasedatabase.app",
+    );
+  }
 
   const directives = [
     `default-src 'self'`,

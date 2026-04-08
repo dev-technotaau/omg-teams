@@ -42,6 +42,19 @@ export async function submitLeaveRequest(data: {
 }) {
   const prisma = getPrisma();
 
+  // Admin is excluded from the leave system entirely
+  const requester = await prisma.user.findUnique({
+    where: { id: data.userId },
+    select: { role: true },
+  });
+  if (requester?.role === "ADMIN") {
+    throw new AppError(
+      "Admin accounts cannot request leave",
+      HttpStatus.FORBIDDEN,
+      ErrorCode.FORBIDDEN,
+    );
+  }
+
   const start = new Date(data.startDate);
   const end = new Date(data.endDate);
 
@@ -114,7 +127,12 @@ export async function submitLeaveRequest(data: {
     },
   });
 
-  if (balance && balance.remaining < numberOfDays) {
+  // §28.2 — Negative balance gating. When the platform setting
+  // `leave_negative_balance` is enabled, employees may apply beyond their
+  // remaining balance (the balance just goes negative on approval).
+  const { getSettingBool } = await import("./settings.service.js");
+  const allowNegative = await getSettingBool("leave_negative_balance", false);
+  if (!allowNegative && balance && balance.remaining < numberOfDays) {
     throw new AppError(
       "Insufficient leave balance",
       HttpStatus.BAD_REQUEST,
@@ -204,7 +222,9 @@ export async function approveLeave(requestId: string, adminId: string) {
       userId_leaveTypeId_year: { userId: request.userId, leaveTypeId: request.leaveTypeId, year },
     },
   });
-  if (balance && balance.remaining <= 2 && balance.remaining >= 0) {
+  const { getSettingNumber } = await import("./settings.service.js");
+  const lowThreshold = await getSettingNumber("leave_low_balance_threshold", 2);
+  if (balance && balance.remaining <= lowThreshold && balance.remaining >= 0) {
     const { onLeaveBalanceLow } = await import("./notification-triggers.js");
     void onLeaveBalanceLow(request.userId, updated.leaveType.name, balance.remaining);
   }
@@ -447,6 +467,9 @@ export async function listAllLeaveRequests(filters: {
   } else if (filters.userId) {
     where.userId = filters.userId;
   }
+
+  // Admin is excluded from the leave system entirely
+  where.user = { role: { not: "ADMIN" } };
 
   const [data, total] = await Promise.all([
     prisma.leaveRequest.findMany({

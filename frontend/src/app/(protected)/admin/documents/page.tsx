@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo } from "react";
+import { useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
 import {
   Check,
   X,
@@ -37,8 +39,7 @@ interface EmployeeDoc {
 }
 
 export default function AdminDocumentsPage() {
-  const [data, setData] = useState<PaginatedResponse<EmployeeDoc> | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const qc = useQueryClient();
   const [statusFilter, setStatusFilter] = useState("PENDING");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -47,23 +48,25 @@ export default function AdminDocumentsPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isBatchProcessing, setIsBatchProcessing] = useState(false);
 
-  const fetchData = useCallback(async () => {
-    setIsLoading(true);
-    try {
+  // Server state — paginated employee documents.
+  const docsQuery = useQuery({
+    queryKey: qk.documents.list({ page, statusFilter, search }),
+    queryFn: async () => {
       const params: Record<string, string> = { page: String(page), limit: "25" };
       if (statusFilter) params["status"] = statusFilter;
       if (search) params["search"] = search;
       const res = await api.get<PaginatedResponse<EmployeeDoc>>("/documents", { params });
-      setData(res.data);
-      setSelectedIds(new Set());
-    } finally {
-      setIsLoading(false);
-    }
-  }, [page, statusFilter, search]);
+      return res.data;
+    },
+    placeholderData: keepPreviousData,
+  });
+  const data = docsQuery.data ?? null;
+  const isLoading = docsQuery.isLoading;
 
-  useEffect(() => {
-    void fetchData();
-  }, [fetchData]);
+  const fetchData = useCallback(
+    () => qc.invalidateQueries({ queryKey: qk.documents.lists() }),
+    [qc],
+  );
 
   const handleVerify = async (id: string) => {
     try {
@@ -238,20 +241,8 @@ export default function AdminDocumentsPage() {
         </Card>
       </div>
 
-      {/* Search */}
-      <SearchInput
-        value={search}
-        onChange={(v) => {
-          setSearch(v);
-          setPage(1);
-        }}
-        placeholder="Search by employee name or document..."
-        historyKey="documents"
-        className="max-w-sm"
-      />
-
-      {/* Filter Tabs + Batch Actions */}
-      <div className="flex items-center justify-between">
+      {/* Filter Tabs + Search + Batch Actions */}
+      <div className="flex flex-wrap items-center gap-3">
         <div className="border-border-default bg-bg-muted flex w-fit gap-1 rounded-lg border p-1">
           {["PENDING", "VERIFIED", "REJECTED", ""].map((s) => (
             <button
@@ -272,8 +263,19 @@ export default function AdminDocumentsPage() {
           ))}
         </div>
 
+        <SearchInput
+          value={search}
+          onChange={(v) => {
+            setSearch(v);
+            setPage(1);
+          }}
+          placeholder="Search by employee name or document..."
+          historyKey="documents"
+          className="min-w-48 max-w-sm flex-1"
+        />
+
         {selectedIds.size > 0 && (
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="ml-auto flex flex-wrap items-center gap-2">
             <span className="text-text-secondary text-sm">{selectedIds.size} selected</span>
             <button
               onClick={() => void handleBatchVerify()}

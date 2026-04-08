@@ -59,6 +59,10 @@ const DEFAULT_TEMPLATES: Record<
     ...toSubjectBody(templates.deviceLockBlocked("{{userName}}", "{{deviceInfo}}")),
     variables: ["userName", "deviceInfo"],
   },
+  system_alert: {
+    ...toSubjectBody(templates.systemAlert("{{title}}", "{{message}}", "{{actionUrl}}")),
+    variables: ["title", "message", "actionUrl"],
+  },
   "scheduled-report-delivery": {
     ...toSubjectBody(
       templates.scheduledReportDelivery(

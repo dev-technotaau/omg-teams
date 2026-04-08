@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { KeyRound, Mail, Phone, Eye, EyeOff, ArrowLeft } from "lucide-react";
+import { KeyRound, Mail, Phone, ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
 import { useAuth } from "@/contexts/auth";
@@ -13,7 +13,7 @@ import {
   verifyEmailChange,
   updateMobile,
 } from "@/services/account.service";
-import { PageHeader, Card, FormField, Input, Button } from "@/components/ui";
+import { PageHeader, Card, FormField, Input, PhoneInput, Button } from "@/components/ui";
 import { PasswordStrength } from "@/components/password-strength";
 
 // ──────────────────────────────────────────────
@@ -62,8 +62,6 @@ function ChangePasswordSection() {
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [showCurrent, setShowCurrent] = useState(false);
-  const [showNew, setShowNew] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -108,43 +106,25 @@ function ChangePasswordSection() {
       </Card.Header>
       <Card.Body className="space-y-4">
         <FormField label="Current Password" htmlFor="current-password" required>
-          <div className="relative">
-            <Input
-              id="current-password"
-              type={showCurrent ? "text" : "password"}
-              value={currentPassword}
-              onChange={(e) => setCurrentPassword(e.target.value)}
-              placeholder="Enter current password"
-              autoComplete="current-password"
-            />
-            <button
-              type="button"
-              onClick={() => setShowCurrent(!showCurrent)}
-              className="text-text-muted hover:text-text-primary absolute top-1/2 right-3 -translate-y-1/2"
-            >
-              {showCurrent ? <EyeOff size={16} /> : <Eye size={16} />}
-            </button>
-          </div>
+          <Input
+            id="current-password"
+            type="password"
+            value={currentPassword}
+            onChange={(e) => setCurrentPassword(e.target.value)}
+            placeholder="Enter current password"
+            autoComplete="current-password"
+          />
         </FormField>
 
         <FormField label="New Password" htmlFor="new-password" required>
-          <div className="relative">
-            <Input
-              id="new-password"
-              type={showNew ? "text" : "password"}
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              placeholder="Enter new password"
-              autoComplete="new-password"
-            />
-            <button
-              type="button"
-              onClick={() => setShowNew(!showNew)}
-              className="text-text-muted hover:text-text-primary absolute top-1/2 right-3 -translate-y-1/2"
-            >
-              {showNew ? <EyeOff size={16} /> : <Eye size={16} />}
-            </button>
-          </div>
+          <Input
+            id="new-password"
+            type="password"
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
+            placeholder="Enter new password"
+            autoComplete="new-password"
+          />
           {newPassword.length > 0 && <PasswordStrength password={newPassword} />}
         </FormField>
 
@@ -390,11 +370,10 @@ function ChangeMobileSection({
       </Card.Header>
       <Card.Body className="space-y-4">
         <FormField label="New Mobile Number" htmlFor="new-mobile" required>
-          <Input
+          <PhoneInput
             id="new-mobile"
-            type="tel"
             value={mobileNumber}
-            onChange={(e) => setMobileNumber(e.target.value)}
+            onChange={setMobileNumber}
             placeholder="Enter new mobile number"
           />
         </FormField>

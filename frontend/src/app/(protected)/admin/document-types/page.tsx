@@ -1,9 +1,12 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState } from "react";
 import { Plus, Pencil, Trash2, ArrowUp, ArrowDown, FileCheck } from "lucide-react";
 import { toast } from "sonner";
-import { api, extractApiError } from "@/lib/api";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { api } from "@/lib/api";
+import { qk } from "@/lib/query-keys";
+import { toastApiError } from "@/lib/query-helpers";
 import {
   PageHeader,
   Card,
@@ -62,8 +65,7 @@ const FORMAT_LABELS: Record<string, string> = {
 };
 
 export default function DocumentTypesPage() {
-  const [types, setTypes] = useState<DocumentType[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const qc = useQueryClient();
   const [showModal, setShowModal] = useState(false);
   const [editTarget, setEditTarget] = useState<DocumentType | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DocumentType | null>(null);
@@ -79,21 +81,99 @@ export default function DocumentTypesPage() {
   ]);
   const [formRequired, setFormRequired] = useState(false);
 
-  const fetchTypes = useCallback(async () => {
-    setIsLoading(true);
-    try {
+  // Server state via TanStack Query — cache + background refetch on focus.
+  const { data: types = [], isLoading } = useQuery({
+    queryKey: qk.documentTypes.list(),
+    queryFn: async () => {
       const res = await api.get<{ types: DocumentType[] }>("/documents/types/all");
-      setTypes(res.data.types);
-    } catch (err) {
-      toast.error(extractApiError(err).message);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
+      return res.data.types;
+    },
+  });
 
-  useEffect(() => {
-    void fetchTypes();
-  }, [fetchTypes]);
+  const invalidate = () => qc.invalidateQueries({ queryKey: qk.documentTypes.lists() });
+
+  // Combined create/update — the modal handles both, server distinguishes by id.
+  const upsertMutation = useMutation({
+    mutationFn: async (payload: {
+      id?: string;
+      name: string;
+      code: string;
+      description?: string;
+      acceptedFormats: string[];
+      isRequired: boolean;
+    }) => {
+      const { id, ...body } = payload;
+      if (id) {
+        await api.patch(`/documents/types/manage/${id}`, body);
+      } else {
+        await api.post("/documents/types/manage", body);
+      }
+    },
+    onSuccess: (_data, vars) => {
+      toast.success(vars.id ? "Document type updated" : "Document type created");
+      setShowModal(false);
+      void invalidate();
+    },
+    onError: (err) => toastApiError(err, "Failed to save document type"),
+  });
+
+  // Optimistic delete (deactivate) — yank from cache instantly, rollback on error.
+  const deactivateMutation = useMutation({
+    mutationFn: (id: string) => api.delete(`/documents/types/manage/${id}`),
+    onMutate: async (id) => {
+      const key = qk.documentTypes.list();
+      await qc.cancelQueries({ queryKey: key });
+      const prev = qc.getQueryData<DocumentType[]>(key);
+      qc.setQueryData<DocumentType[]>(key, (old) => (old ?? []).filter((t) => t.id !== id));
+      return { prev, key };
+    },
+    onError: (err, _id, ctx) => {
+      if (ctx) qc.setQueryData(ctx.key, ctx.prev);
+      toastApiError(err, "Failed to deactivate document type");
+    },
+    onSuccess: () => {
+      toast.success("Document type deactivated");
+      setDeleteTarget(null);
+    },
+    onSettled: () => void invalidate(),
+  });
+
+  // Optimistic toggle — flip isActive in cache instantly.
+  const toggleActiveMutation = useMutation({
+    mutationFn: ({ id, isActive }: { id: string; isActive: boolean }) =>
+      api.patch(`/documents/types/manage/${id}`, { isActive }),
+    onMutate: async ({ id, isActive }) => {
+      const key = qk.documentTypes.list();
+      await qc.cancelQueries({ queryKey: key });
+      const prev = qc.getQueryData<DocumentType[]>(key);
+      qc.setQueryData<DocumentType[]>(key, (old) =>
+        (old ?? []).map((t) => (t.id === id ? { ...t, isActive } : t)),
+      );
+      return { prev, key };
+    },
+    onError: (err, _vars, ctx) => {
+      if (ctx) qc.setQueryData(ctx.key, ctx.prev);
+      toastApiError(err, "Failed to toggle status");
+    },
+    onSuccess: (_d, vars) => toast.success(vars.isActive ? "Activated" : "Deactivated"),
+    onSettled: () => void invalidate(),
+  });
+
+  // Reorder swaps two adjacent records' sortOrder values; we just invalidate
+  // afterwards (the affected rows are tiny and the optimistic patch isn't worth it).
+  const reorderMutation = useMutation({
+    mutationFn: async (vars: {
+      a: { id: string; sortOrder: number };
+      b: { id: string; sortOrder: number };
+    }) => {
+      await Promise.all([
+        api.patch(`/documents/types/manage/${vars.a.id}`, { sortOrder: vars.b.sortOrder }),
+        api.patch(`/documents/types/manage/${vars.b.id}`, { sortOrder: vars.a.sortOrder }),
+      ]);
+    },
+    onError: (err) => toastApiError(err, "Failed to reorder"),
+    onSettled: () => void invalidate(),
+  });
 
   const openCreate = () => {
     setEditTarget(null);
@@ -115,75 +195,40 @@ export default function DocumentTypesPage() {
     setShowModal(true);
   };
 
-  const handleSubmit = async () => {
+  const handleSubmit = () => {
     if (!formName.trim() || !formCode.trim()) {
       toast.error("Name and code are required");
       return;
     }
-    try {
-      if (editTarget) {
-        await api.patch(`/documents/types/manage/${editTarget.id}`, {
-          name: formName,
-          code: formCode.toUpperCase(),
-          description: formDescription || undefined,
-          acceptedFormats: formFormats,
-          isRequired: formRequired,
-        });
-        toast.success("Document type updated");
-      } else {
-        await api.post("/documents/types/manage", {
-          name: formName,
-          code: formCode.toUpperCase(),
-          description: formDescription || undefined,
-          acceptedFormats: formFormats,
-          isRequired: formRequired,
-        });
-        toast.success("Document type created");
-      }
-      setShowModal(false);
-      void fetchTypes();
-    } catch (err) {
-      toast.error(extractApiError(err).message);
-    }
+    upsertMutation.mutate({
+      ...(editTarget ? { id: editTarget.id } : {}),
+      name: formName,
+      code: formCode.toUpperCase(),
+      ...(formDescription ? { description: formDescription } : {}),
+      acceptedFormats: formFormats,
+      isRequired: formRequired,
+    });
   };
 
-  const handleDeactivate = async () => {
+  const handleDeactivate = () => {
     if (!deleteTarget) return;
-    try {
-      await api.delete(`/documents/types/manage/${deleteTarget.id}`);
-      toast.success("Document type deactivated");
-      setDeleteTarget(null);
-      void fetchTypes();
-    } catch (err) {
-      toast.error(extractApiError(err).message);
-    }
+    deactivateMutation.mutate(deleteTarget.id);
   };
 
-  const handleToggleActive = async (dt: DocumentType) => {
-    try {
-      await api.patch(`/documents/types/manage/${dt.id}`, { isActive: !dt.isActive });
-      toast.success(dt.isActive ? "Deactivated" : "Activated");
-      void fetchTypes();
-    } catch (err) {
-      toast.error(extractApiError(err).message);
-    }
+  const handleToggleActive = (dt: DocumentType) => {
+    toggleActiveMutation.mutate({ id: dt.id, isActive: !dt.isActive });
   };
 
-  const handleReorder = async (dt: DocumentType, direction: "up" | "down") => {
+  const handleReorder = (dt: DocumentType, direction: "up" | "down") => {
     const idx = types.findIndex((t) => t.id === dt.id);
     const swapIdx = direction === "up" ? idx - 1 : idx + 1;
     if (swapIdx < 0 || swapIdx >= types.length) return;
     const other = types[swapIdx];
     if (!other) return;
-    try {
-      await Promise.all([
-        api.patch(`/documents/types/manage/${dt.id}`, { sortOrder: other.sortOrder }),
-        api.patch(`/documents/types/manage/${other.id}`, { sortOrder: dt.sortOrder }),
-      ]);
-      void fetchTypes();
-    } catch (err) {
-      toast.error(extractApiError(err).message);
-    }
+    reorderMutation.mutate({
+      a: { id: dt.id, sortOrder: dt.sortOrder },
+      b: { id: other.id, sortOrder: other.sortOrder },
+    });
   };
 
   const toggleFormat = (format: string) => {

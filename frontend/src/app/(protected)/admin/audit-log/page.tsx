@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo } from "react";
+import { useQuery, keepPreviousData } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
 import { Download, Filter, X, ScrollText, Shield, Activity } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
@@ -91,8 +93,6 @@ const ENTITY_BADGE_VARIANT: Record<string, "primary" | "info" | "default"> = {
 };
 
 export default function AuditLogPage() {
-  const [data, setData] = useState<AuditResponse | null>(null);
-  const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [detailEntry, setDetailEntry] = useState<AuditEntry | null>(null);
   const [sortKey, setSortKey] = useState("");
@@ -109,9 +109,9 @@ export default function AuditLogPage() {
   const [dateTo, setDateTo] = useState("");
   const [appliedFilters, setAppliedFilters] = useState<Record<string, string>>({});
 
-  const fetchLogs = useCallback(async () => {
-    setLoading(true);
-    try {
+  const auditQuery = useQuery({
+    queryKey: qk.auditLog.list({ page, ...appliedFilters }),
+    queryFn: async () => {
       const params = new URLSearchParams({
         page: String(page),
         limit: String(DEFAULT_LARGE_PAGE_SIZE),
@@ -121,19 +121,13 @@ export default function AuditLogPage() {
       if (appliedFilters.userId) params.set("userId", appliedFilters.userId);
       if (appliedFilters.dateFrom) params.set("dateFrom", appliedFilters.dateFrom);
       if (appliedFilters.dateTo) params.set("dateTo", appliedFilters.dateTo);
-      const res = await api.get(`/audit-logs?${params.toString()}`);
-      setData(res.data);
-    } catch {
-      toast.error("Failed to load audit logs");
-    } finally {
-      setLoading(false);
-    }
-  }, [page, appliedFilters]);
-
-  useEffect(() => {
-    void fetchLogs();
-  }, [fetchLogs]);
-
+      const res = await api.get<AuditResponse>(`/audit-logs?${params.toString()}`);
+      return res.data;
+    },
+    placeholderData: keepPreviousData,
+  });
+  const data = auditQuery.data ?? null;
+  const loading = auditQuery.isLoading;
   const applyFilters = () => {
     setPage(1);
     setAppliedFilters({

@@ -35,6 +35,7 @@ const createUserSchema = z.object({
   mobileNumber: z.string().trim().optional(),
   address: z.string().trim().optional(),
   managerIds: z.array(z.string()).optional(),
+  recruiterIds: z.array(z.string()).optional(),
 });
 
 /** POST /api/v1/users */
@@ -67,6 +68,7 @@ export async function handleCreateUser(req: Request, res: Response): Promise<voi
       role: result.role,
       plainPassword: result.plainPassword,
       assignedManagers: result.assignedManagers,
+      assignedRecruiters: result.assignedRecruiters,
     },
   });
 }

@@ -27,20 +27,65 @@ async function getUserName(userId: string): Promise<string> {
   return user ? `${user.firstName} ${user.lastName}` : "Unknown";
 }
 
-/** Helper to notify all admins */
+/** Helper to notify all admins.
+ *  Honors PlatformSetting `notification_admin_emails` (CSV of extra emails
+ *  that get the alert via email even if they're not admin users).
+ *  `category` is used to gate event-specific toggles like
+ *  `notification_device_mismatch` / `notification_suspicious_activity`.
+ */
 async function notifyAdmins(data: {
   type: Parameters<typeof createNotification>[0]["type"];
   title: string;
   message: string;
   actionUrl?: string;
   metadata?: Record<string, unknown>;
+  category?: "device_mismatch" | "suspicious_activity";
 }) {
+  const { getSettingBool, getSettingCSV } = await import("./settings.service.js");
+
+  // Per-event kill switches
+  if (data.category === "device_mismatch") {
+    if (!(await getSettingBool("notification_device_mismatch", true))) return;
+  }
+  if (data.category === "suspicious_activity") {
+    if (!(await getSettingBool("notification_suspicious_activity", true))) return;
+  }
+
   const adminIds = await getAdminUserIds();
   for (const adminId of adminIds) {
     try {
-      await createNotification({ userId: adminId, ...data });
+      await createNotification({
+        userId: adminId,
+        type: data.type,
+        title: data.title,
+        message: data.message,
+        ...(data.actionUrl !== undefined ? { actionUrl: data.actionUrl } : {}),
+        ...(data.metadata !== undefined ? { metadata: data.metadata } : {}),
+      });
     } catch (err) {
       logger.error("Failed to send admin notification", { adminId, error: err });
+    }
+  }
+
+  // Extra recipients from PlatformSetting (system alerts to ops mailbox etc.)
+  const extraEmails = await getSettingCSV("notification_admin_emails", []);
+  if (extraEmails.length > 0) {
+    try {
+      const { enqueueEmail } = await import("../jobs/email.queue.js");
+      for (const to of extraEmails) {
+        void enqueueEmail({
+          to,
+          subject: `[OMG Teams] ${data.title}`,
+          template: "system_alert",
+          context: {
+            title: data.title,
+            message: data.message,
+            actionUrl: data.actionUrl ?? null,
+          },
+        });
+      }
+    } catch {
+      /* non-critical — primary notification path already fired */
     }
   }
 }
@@ -330,7 +375,17 @@ export async function onAccountReactivated(userId: string) {
 
 // ──────────────────────────────────────────────
 //  TARGET NOTIFICATIONS (§11.4)
+//
+//  All target triggers respect the user's TARGET notification
+//  preference toggle. This is in addition to the broader push/email
+//  channel checks that createNotification performs internally.
 // ──────────────────────────────────────────────
+
+/** Check if user has TARGET notifications enabled (default: true) */
+async function targetNotificationsEnabled(userId: string): Promise<boolean> {
+  const { shouldNotify } = await import("./notification-preference.service.js");
+  return shouldNotify(userId, "TARGET");
+}
 
 /** Target assigned → notify recruiter */
 export async function onTargetAssigned(
@@ -338,6 +393,7 @@ export async function onTargetAssigned(
   targetType: string,
   targetValue: number,
 ) {
+  if (!(await targetNotificationsEnabled(recruiterId))) return;
   await createNotification({
     userId: recruiterId,
     type: "TARGET",
@@ -353,6 +409,7 @@ export async function onTargetUpdated(
   targetType: string,
   targetValue: number,
 ) {
+  if (!(await targetNotificationsEnabled(recruiterId))) return;
   await createNotification({
     userId: recruiterId,
     type: "TARGET",
@@ -362,22 +419,40 @@ export async function onTargetUpdated(
   });
 }
 
-/** Daily target achieved → notify recruiter */
-export async function onTargetAchieved(recruiterId: string, count: number) {
-  await createNotification({
-    userId: recruiterId,
-    type: "TARGET",
-    title: "Daily Target Achieved!",
-    message: `You reached your daily target: ${count} candidates sourced today!`,
-    actionUrl: "/dashboard",
-  });
-  // Also notify assigned RM
+/**
+ * Target achieved → notify recruiter and assigned RMs.
+ *
+ * §11.4 — Idempotent per (recruiter, period) so the notification
+ * fires once per period (day/week/month). De-duplication is enforced
+ * by the caller (target.service.checkAndFireAchievement) using a
+ * Redis lock.
+ */
+export async function onTargetAchieved(
+  recruiterId: string,
+  count: number,
+  targetType: "DAILY" | "WEEKLY" | "MONTHLY" = "DAILY",
+) {
+  const enabled = await targetNotificationsEnabled(recruiterId);
+  const periodLabel =
+    targetType === "DAILY" ? "daily" : targetType === "WEEKLY" ? "weekly" : "monthly";
+
+  if (enabled) {
+    await createNotification({
+      userId: recruiterId,
+      type: "TARGET",
+      title: `${targetType[0]}${targetType.slice(1).toLowerCase()} Target Achieved!`,
+      message: `You reached your ${periodLabel} target: ${count} candidates sourced!`,
+      actionUrl: "/my-targets",
+    });
+  }
+  // RMs are notified independently of the recruiter's preference —
+  // it's the manager's preference that gates their delivery.
   await notifyAssignedManagers(recruiterId, {
     type: "TARGET",
     title: "Recruiter Target Achieved",
-    message: `${await getUserName(recruiterId)} reached their daily target today!`,
+    message: `${await getUserName(recruiterId)} reached their ${periodLabel} target (${count}).`,
     actionUrl: "/my-recruiters",
-    metadata: { recruiterId },
+    metadata: { recruiterId, targetType, count },
   });
 }
 
@@ -543,6 +618,46 @@ export async function onLoginBlocked(userId: string, deviceInfo: string) {
     message: `Login attempt blocked for ${name} — device mismatch. Device: ${deviceInfo.slice(0, 50)}`,
     actionUrl: "/admin/users",
     metadata: { userId },
+    category: "device_mismatch",
+  });
+}
+
+/**
+ * §16 — Login anomaly blocked (new country / impossible travel).
+ * Notifies BOTH the affected user (so they know their account was targeted)
+ * AND admins (for security visibility).
+ */
+export async function onLoginAnomalyBlocked(
+  userId: string,
+  reason: string,
+  country: string | undefined,
+) {
+  const name = await getUserName(userId);
+  const where = country ? ` from ${country}` : "";
+
+  // Notify the user themselves — most important signal: "your account is
+  // being targeted." Ignored if user has no notification channel — that's
+  // fine, the admin notification is the backstop.
+  try {
+    await createNotification({
+      userId,
+      type: "ACCOUNT",
+      title: "Login Attempt Blocked",
+      message: `A login to your account was blocked${where}. If this was you, contact your admin for a backup code. If not, your password may be compromised — change it immediately.`,
+      actionUrl: "/profile",
+      metadata: { reason },
+    });
+  } catch (err) {
+    logger.error("Failed to send anomaly notification to user", { userId, error: err });
+  }
+
+  await notifyAdmins({
+    type: "ACCOUNT",
+    title: "Login Blocked (Anomaly)",
+    message: `${name}: ${reason.slice(0, 120)}`,
+    actionUrl: "/admin/users",
+    metadata: { userId, reason, country },
+    category: "suspicious_activity",
   });
 }
 

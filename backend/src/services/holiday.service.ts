@@ -11,17 +11,38 @@ export async function listHolidays(year?: number) {
   return cache.getOrSet(
     cacheKey,
     async () => {
-      const where: Record<string, unknown> = {};
-      if (year) {
-        const start = new Date(`${year}-01-01`);
-        const end = new Date(`${year + 1}-01-01`);
-        where["date"] = { gte: start, lt: end };
+      if (!year) {
+        return prisma.holiday.findMany({
+          orderBy: { date: "asc" },
+          include: { creator: { select: { firstName: true, lastName: true } } },
+        });
       }
-      return prisma.holiday.findMany({
-        where,
-        orderBy: { date: "asc" },
-        include: { creator: { select: { firstName: true, lastName: true } } },
-      });
+      // For a specific year: include rows whose date falls in that year,
+      // PLUS recurring rows from any prior year (projected onto this year).
+      const start = new Date(`${year}-01-01`);
+      const end = new Date(`${year + 1}-01-01`);
+      const [inYear, recurringPrior] = await Promise.all([
+        prisma.holiday.findMany({
+          where: { date: { gte: start, lt: end } },
+          include: { creator: { select: { firstName: true, lastName: true } } },
+        }),
+        prisma.holiday.findMany({
+          where: { isRecurring: true, date: { lt: start } },
+          include: { creator: { select: { firstName: true, lastName: true } } },
+        }),
+      ]);
+      // De-dupe: if a recurring holiday's projection lands on a date that
+      // already exists in `inYear`, prefer the in-year row.
+      const inYearKeys = new Set(
+        inYear.map((h) => `${h.date.getUTCMonth()}-${h.date.getUTCDate()}`),
+      );
+      const projected = recurringPrior
+        .filter((h) => !inYearKeys.has(`${h.date.getUTCMonth()}-${h.date.getUTCDate()}`))
+        .map((h) => ({
+          ...h,
+          date: new Date(Date.UTC(year, h.date.getUTCMonth(), h.date.getUTCDate())),
+        }));
+      return [...inYear, ...projected].sort((a, b) => a.date.getTime() - b.date.getTime());
     },
     86400,
   );
@@ -78,10 +99,24 @@ export async function isHoliday(date: Date): Promise<boolean> {
       startOfDay.setHours(0, 0, 0, 0);
       const endOfDay = new Date(date);
       endOfDay.setHours(23, 59, 59, 999);
-      const count = await prisma.holiday.count({
+      // Exact-date match (one-off or this year's instance of a recurring)
+      const exact = await prisma.holiday.count({
         where: { date: { gte: startOfDay, lte: endOfDay } },
       });
-      return count > 0;
+      if (exact > 0) return true;
+      // Recurring match: any prior-year recurring holiday whose month+day
+      // matches this date. Postgres EXTRACT via raw query — Prisma can't
+      // express month/day equality on a Date column otherwise.
+      const month = date.getUTCMonth() + 1;
+      const day = date.getUTCDate();
+      const rows = await prisma.$queryRaw<{ count: bigint }[]>`
+        SELECT COUNT(*)::bigint AS count
+        FROM "Holiday"
+        WHERE "isRecurring" = true
+          AND EXTRACT(MONTH FROM "date") = ${month}
+          AND EXTRACT(DAY FROM "date") = ${day}
+      `;
+      return Number(rows[0]?.count ?? 0) > 0;
     },
     86400,
   );

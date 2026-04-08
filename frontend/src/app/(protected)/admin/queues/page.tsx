@@ -1,32 +1,23 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useCallback } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
 import {
   RefreshCw,
-  Pause,
-  Play,
-  Trash2,
   Activity,
   CheckCircle2,
   Clock,
   AlertTriangle,
   Timer,
 } from "lucide-react";
-import { toast } from "sonner";
-import {
-  getQueueStats,
-  pauseQueue,
-  resumeQueue,
-  cleanQueue,
-  type QueueStats,
-} from "@/services/queue.service";
+import { getQueueStats, type QueueStats } from "@/services/queue.service";
 import {
   PageHeader,
   Card,
   StatsCard,
   Button,
   Badge,
-  ConfirmDialog,
   TableSkeleton,
 } from "@/components/ui";
 
@@ -43,60 +34,26 @@ const QUEUE_DESCRIPTIONS: Record<string, string> = {
   "absent-detection": "Auto-detect absent employees",
   "session-expiry": "Cleanup expired sessions",
   "scheduled-report": "Scheduled report generation and delivery",
-  backup: "Database backup jobs",
+  "database-backup": "Database backup jobs",
+  "candidate-import": "Bulk candidate CSV/XLSX imports",
+  "tor-list": "Tor exit-node IP list refresh",
 };
 
 export default function QueueDashboardPage() {
-  const [queues, setQueues] = useState<QueueStats[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [cleanTarget, setCleanTarget] = useState<string | null>(null);
+  const qc = useQueryClient();
 
-  const fetchStats = useCallback(async (showRefresh = false) => {
-    if (showRefresh) setRefreshing(true);
-    try {
-      const stats = await getQueueStats();
-      setQueues(stats);
-    } catch {
-      toast.error("Failed to load queue stats");
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void fetchStats();
-    const interval = setInterval(() => void fetchStats(), 15_000);
-    return () => clearInterval(interval);
-  }, [fetchStats]);
-
-  const handlePauseResume = async (name: string, isPaused: boolean) => {
-    try {
-      if (isPaused) {
-        await resumeQueue(name);
-        toast.success(`Queue "${name}" resumed`);
-      } else {
-        await pauseQueue(name);
-        toast.success(`Queue "${name}" paused`);
-      }
-      void fetchStats();
-    } catch {
-      toast.error("Operation failed");
-    }
-  };
-
-  const handleClean = async () => {
-    if (!cleanTarget) return;
-    try {
-      const removed = await cleanQueue(cleanTarget);
-      toast.success(`Cleaned ${removed.completed} completed and ${removed.failed} failed jobs`);
-      setCleanTarget(null);
-      void fetchStats();
-    } catch {
-      toast.error("Failed to clean queue");
-    }
-  };
+  const queuesQuery = useQuery({
+    queryKey: qk.queues.stats(),
+    queryFn: getQueueStats,
+    refetchInterval: 15_000,
+  });
+  const queues: QueueStats[] = queuesQuery.data ?? [];
+  const loading = queuesQuery.isLoading;
+  const refreshing = queuesQuery.isFetching && !queuesQuery.isLoading;
+  const fetchStats = useCallback(
+    () => qc.invalidateQueries({ queryKey: qk.queues.stats() }),
+    [qc],
+  );
 
   // Aggregated totals
   const totals = queues.reduce(
@@ -122,7 +79,7 @@ export default function QueueDashboardPage() {
           variant="outline"
           size="sm"
           loading={refreshing}
-          onClick={() => void fetchStats(true)}
+          onClick={() => void fetchStats()}
         >
           Refresh
         </Button>
@@ -178,23 +135,6 @@ export default function QueueDashboardPage() {
                     <CounterBadge label="Failed" count={q.counts.failed} color="red" />
                   </div>
 
-                  {/* Actions */}
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => void handlePauseResume(q.name, q.isPaused)}
-                      className="text-text-muted hover:text-primary-500 rounded p-1.5 transition-colors"
-                      title={q.isPaused ? "Resume" : "Pause"}
-                    >
-                      {q.isPaused ? <Play size={16} /> : <Pause size={16} />}
-                    </button>
-                    <button
-                      onClick={() => setCleanTarget(q.name)}
-                      className="text-text-muted hover:text-error-500 rounded p-1.5 transition-colors"
-                      title="Clean completed/failed jobs"
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
                 </div>
               </Card.Body>
             </Card>
@@ -202,16 +142,6 @@ export default function QueueDashboardPage() {
         </div>
       )}
 
-      {/* Clean confirmation */}
-      <ConfirmDialog
-        open={!!cleanTarget}
-        onClose={() => setCleanTarget(null)}
-        onConfirm={() => void handleClean()}
-        title={`Clean "${cleanTarget}" Queue`}
-        description="This will remove all completed and failed jobs from the queue. Active and waiting jobs will not be affected."
-        confirmLabel="Clean"
-        variant="danger"
-      />
     </div>
   );
 }

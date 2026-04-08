@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { type Role, type AccountStatus } from "@prisma/client";
 import { hashPassword, verifyPassword } from "./password.service.js";
 import { destroyUserSessions, unlockAccount } from "./session.service.js";
@@ -25,32 +26,44 @@ function toNull<T>(value: T | undefined): T | null {
 }
 
 /**
- * Generate next Employee ID (OMG-XXXX format).
+ * Generate a new Employee ID — OMG-<6 random base32 chars>.
+ *
+ * §16 enumeration mitigation — sequential Employee IDs (OMG-0001, OMG-0002…)
+ * are trivially guessable, allowing an attacker to enumerate the entire
+ * employee population by walking the integer space. Switching to 6 random
+ * base32 chars (RFC 4648 alphabet, A-Z + 2-7) yields 32^6 ≈ 1.07 billion
+ * possible IDs, making walk-the-space enumeration infeasible while keeping
+ * the ID short and human-typable.
+ *
+ * Existing legacy `OMG-<digits>` IDs are NOT migrated — they continue to work
+ * indefinitely. Only newly generated IDs use the random suffix.
+ *
+ * Generation collides on duplicate (1-in-a-billion) — we retry up to 5 times
+ * to be safe, then fall through (the unique constraint on `employeeId` will
+ * surface a clean conflict if we somehow exhaust retries).
+ *
  * Spec Section 6.3.1
  */
+const EMPLOYEE_ID_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"; // RFC 4648 base32
 export async function generateEmployeeId(): Promise<string> {
   const prisma = getPrisma();
-
-  // Find the highest existing numeric portion (not just latest by createdAt)
-  const allIds = await prisma.user.findMany({
-    where: { employeeId: { not: null } },
-    select: { employeeId: true },
-  });
-
-  let maxNumber = 0;
-  for (const u of allIds) {
-    if (!u.employeeId) continue;
-    const match = /^OMG-(\d+)$/.exec(u.employeeId);
-    if (match?.[1]) {
-      const num = parseInt(match[1], 10);
-      if (num > maxNumber) maxNumber = num;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const bytes = crypto.randomBytes(6);
+    let suffix = "";
+    for (let i = 0; i < 6; i++) {
+      // bytes[i]! is non-null because we just allocated 6 bytes
+      suffix += EMPLOYEE_ID_ALPHABET[bytes[i]! % 32];
     }
+    const candidate = `OMG-${suffix}`;
+    const exists = await prisma.user.findFirst({
+      where: { employeeId: candidate },
+      select: { id: true },
+    });
+    if (!exists) return candidate;
   }
-
-  const nextNumber = maxNumber + 1;
-  // Zero-pad to 4 digits minimum
-  const padded = nextNumber.toString().padStart(4, "0");
-  return `OMG-${padded}`;
+  // Astronomically unlikely (5 collisions in 1 billion space) — surface a
+  // clear error rather than silently looping.
+  throw new Error("Failed to generate a unique Employee ID after 5 attempts");
 }
 
 export interface CreateUserInput {
@@ -61,7 +74,8 @@ export interface CreateUserInput {
   role: "RECRUITER" | "REPORTING_MANAGER";
   mobileNumber?: string | undefined;
   address?: string | undefined;
-  managerIds?: string[] | undefined;
+  managerIds?: string[] | undefined; // for Recruiter accounts — assigned RMs
+  recruiterIds?: string[] | undefined; // for RM accounts — recruiters reporting to this RM
 }
 
 export interface CreateUserResult {
@@ -73,6 +87,7 @@ export interface CreateUserResult {
   role: Role;
   plainPassword: string; // only returned once at creation
   assignedManagers: string[];
+  assignedRecruiters: string[];
 }
 
 /**
@@ -111,7 +126,7 @@ export async function createUser(input: CreateUserInput): Promise<CreateUserResu
     },
   });
 
-  // Assign Reporting Managers if provided
+  // Assign Reporting Managers if provided (only when creating a Recruiter)
   const assignedManagers: string[] = [];
   if (input.managerIds && input.managerIds.length > 0 && input.role === "RECRUITER") {
     for (const managerId of input.managerIds) {
@@ -123,6 +138,28 @@ export async function createUser(input: CreateUserInput): Promise<CreateUserResu
           data: { recruiterId: user.id, managerId },
         });
         assignedManagers.push(`${manager.firstName} ${manager.lastName}`);
+      }
+    }
+  }
+
+  // Assign Recruiters if provided (only when creating a Reporting Manager)
+  const assignedRecruiters: string[] = [];
+  if (input.recruiterIds && input.recruiterIds.length > 0 && input.role === "REPORTING_MANAGER") {
+    for (const recruiterId of input.recruiterIds) {
+      const recruiter = await prisma.user.findFirst({
+        where: { id: recruiterId, role: "RECRUITER", status: "ACTIVE" },
+      });
+      if (recruiter) {
+        // Skip if already assigned (unique constraint on active assignments)
+        const existing = await prisma.recruiterManagerAssignment.findFirst({
+          where: { recruiterId, managerId: user.id, removedAt: null },
+        });
+        if (!existing) {
+          await prisma.recruiterManagerAssignment.create({
+            data: { recruiterId, managerId: user.id },
+          });
+        }
+        assignedRecruiters.push(`${recruiter.firstName} ${recruiter.lastName}`);
       }
     }
   }
@@ -151,6 +188,7 @@ export async function createUser(input: CreateUserInput): Promise<CreateUserResu
     role: user.role,
     plainPassword: input.password,
     assignedManagers,
+    assignedRecruiters,
   };
 }
 

@@ -23,7 +23,9 @@ const QUEUE_NAMES = [
   "absent-detection",
   "session-expiry",
   "scheduled-report",
-  "backup",
+  "database-backup",
+  "candidate-import",
+  "tor-list",
 ];
 
 /** Create the Bull Board Express adapter (mounted separately in app.ts) */

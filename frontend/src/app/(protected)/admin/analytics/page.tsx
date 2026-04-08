@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
 import { useRouter } from "next/navigation";
 import {
   BarChart3,
@@ -304,37 +306,17 @@ export default function AnalyticsPage() {
   const [workforce, setWorkforce] = useState<WorkforceDistribution | null>(null);
   const [liveMetrics, setLiveMetrics] = useState<LiveMetrics | null>(null);
 
-  // ── Fetch all data ──
-  const fetchAll = useCallback(async () => {
-    setLoading(true);
-    const effectivePeriod = period;
-    const from = period === "custom" ? customFrom : undefined;
-    const to = period === "custom" ? customTo : undefined;
-    try {
+  // ── Fetch all data — wrapped in TanStack Query for caching/background refetch ──
+  const analyticsQuery = useQuery({
+    queryKey: qk.analytics.section("all", { period, customFrom, customTo, trendGranularity, heatmapRange }),
+    queryFn: async () => {
+      const effectivePeriod = period;
+      const from = period === "custom" ? customFrom : undefined;
+      const to = period === "custom" ? customTo : undefined;
       const [
-        kpiRes,
-        funnelRes,
-        trendRes,
-        rpRes,
-        zoneRes,
-        compRes,
-        fbRes,
-        revRes,
-        empRes,
-        lbRes,
-        psRes,
-        crRes,
-        profRes,
-        npRes,
-        healthRes,
-        gstRes,
-        ageRes,
-        expRes,
-        ctcRes,
-        heatRes,
-        attRes,
-        leaveRes,
-        wfRes,
+        kpiRes, funnelRes, trendRes, rpRes, zoneRes, compRes, fbRes, revRes, empRes,
+        lbRes, psRes, crRes, profRes, npRes, healthRes, gstRes, ageRes, expRes, ctcRes,
+        heatRes, attRes, leaveRes, wfRes,
       ] = await Promise.all([
         getKPISummary(effectivePeriod, from, to),
         getPipelineFunnel(effectivePeriod),
@@ -360,40 +342,66 @@ export default function AnalyticsPage() {
         getEmployeeLeaveUtilization(),
         getWorkforceDistribution(),
       ]);
-      setKpi(kpiRes ?? {});
-      setFunnel(funnelRes ?? []);
-      setTrend(trendRes ?? []);
-      setRecruiterPerf(rpRes ?? []);
-      setZones(zoneRes ?? []);
-      setCompanies(compRes ?? []);
-      setFeedback(fbRes ?? []);
-      setRevenue(revRes ?? []);
-      setEmployees(empRes ?? null);
-      setLeaderboard(lbRes ?? []);
-      setPaymentStatus(psRes ?? []);
-      setCompanyRevenue(crRes ?? []);
-      setProfiles(profRes ?? []);
-      setNoticePeriod(npRes ?? []);
-      setHealth(healthRes ?? null);
-      setGstTds(gstRes ?? null);
-      setAgeDist(ageRes ?? []);
-      setExpDist(expRes ?? []);
-      setCtcAnalysis(ctcRes ?? []);
-      setActivityHeatmap(heatRes ?? []);
-      setAttendanceHeatmap(attRes ?? []);
-      setLeaveUtilization(leaveRes ?? []);
-      setWorkforce(wfRes ?? null);
-    } catch {
-      toast.error("Failed to load analytics data");
-    } finally {
+      return {
+        kpi: kpiRes ?? {},
+        funnel: funnelRes ?? [],
+        trend: trendRes ?? [],
+        recruiterPerf: rpRes ?? [],
+        zones: zoneRes ?? [],
+        companies: compRes ?? [],
+        feedback: fbRes ?? [],
+        revenue: revRes ?? [],
+        employees: empRes ?? null,
+        leaderboard: lbRes ?? [],
+        paymentStatus: psRes ?? [],
+        companyRevenue: crRes ?? [],
+        profiles: profRes ?? [],
+        noticePeriod: npRes ?? [],
+        health: healthRes ?? null,
+        gstTds: gstRes ?? null,
+        ageDist: ageRes ?? [],
+        expDist: expRes ?? [],
+        ctcAnalysis: ctcRes ?? [],
+        activityHeatmap: heatRes ?? [],
+        attendanceHeatmap: attRes ?? [],
+        leaveUtilization: leaveRes ?? [],
+        workforce: wfRes ?? null,
+      };
+    },
+  });
+  useEffect(() => {
+    if (analyticsQuery.data) {
+      const d = analyticsQuery.data;
+      setKpi(d.kpi);
+      setFunnel(d.funnel);
+      setTrend(d.trend);
+      setRecruiterPerf(d.recruiterPerf);
+      setZones(d.zones);
+      setCompanies(d.companies);
+      setFeedback(d.feedback);
+      setRevenue(d.revenue);
+      setEmployees(d.employees);
+      setLeaderboard(d.leaderboard);
+      setPaymentStatus(d.paymentStatus);
+      setCompanyRevenue(d.companyRevenue);
+      setProfiles(d.profiles);
+      setNoticePeriod(d.noticePeriod);
+      setHealth(d.health);
+      setGstTds(d.gstTds);
+      setAgeDist(d.ageDist);
+      setExpDist(d.expDist);
+      setCtcAnalysis(d.ctcAnalysis);
+      setActivityHeatmap(d.activityHeatmap);
+      setAttendanceHeatmap(d.attendanceHeatmap);
+      setLeaveUtilization(d.leaveUtilization);
+      setWorkforce(d.workforce);
       setLoading(false);
     }
-  }, [period, customFrom, customTo, trendGranularity, heatmapRange]);
-
-  // ── Initial + period-change fetch ──
-  useEffect(() => {
-    void fetchAll();
-  }, [fetchAll]);
+    if (analyticsQuery.isError) toast.error("Failed to load analytics data");
+  }, [analyticsQuery.data, analyticsQuery.isError]);
+  const fetchAll = useCallback(async () => {
+    await analyticsQuery.refetch();
+  }, [analyticsQuery]);
 
   // ── Live metrics polling every 30s ──
   useEffect(() => {

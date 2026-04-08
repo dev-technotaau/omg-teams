@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
 import {
   FileText,
   Calendar,
@@ -23,7 +25,7 @@ import {
   updateAllPreferences,
   type NotificationPreference,
 } from "@/services/notification-preference.service";
-import { PageHeader, Card, Switch, Badge, Button, Spinner } from "@/components/ui";
+import { PageHeader, Card, Switch, Button, Spinner } from "@/components/ui";
 import { TimePicker } from "@/components/ui/time-picker";
 import { useAuth } from "@/contexts/auth";
 import { usePushNotifications } from "@/hooks/use-push-notifications";
@@ -86,28 +88,25 @@ export default function NotificationPreferencesPage() {
   const { user } = useAuth();
   const { permission, enable: enablePush } = usePushNotifications(user?.id);
   const [preferences, setPreferences] = useState<NotificationPreference[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
   const [original, setOriginal] = useState<NotificationPreference[]>([]);
 
-  const fetchPreferences = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      const data = await getMyPreferences();
-      setPreferences(data);
-      setOriginal(JSON.parse(JSON.stringify(data)));
-      setHasChanges(false);
-    } catch {
-      toast.error("Failed to load notification preferences");
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
+  const prefsQuery = useQuery({
+    queryKey: qk.notifPrefs.detail(),
+    queryFn: getMyPreferences,
+  });
+  const isLoading = prefsQuery.isLoading;
   useEffect(() => {
-    void fetchPreferences();
-  }, [fetchPreferences]);
+    if (prefsQuery.data) {
+      setPreferences(prefsQuery.data);
+      setOriginal(JSON.parse(JSON.stringify(prefsQuery.data)));
+      setHasChanges(false);
+    }
+    if (prefsQuery.isError) {
+      toast.error("Failed to load notification preferences");
+    }
+  }, [prefsQuery.data, prefsQuery.isError]);
 
   const updatePref = (category: string, field: keyof NotificationPreference, value: boolean) => {
     // Request browser notification permission when enabling push for the first time
@@ -212,61 +211,72 @@ export default function NotificationPreferencesPage() {
         </div>
       </Card>
 
-      {/* Category Cards */}
-      <div className="space-y-3">
-        {preferences.map((pref) => {
-          const meta = CATEGORY_META[pref.category];
-          if (!meta) return null;
-          const Icon = meta.icon;
-
-          return (
-            <Card key={pref.category} padding="sm">
-              <div className="space-y-3">
-                {/* Category Header */}
-                <div className="flex items-center gap-3">
-                  <div className="bg-primary-100 flex h-8 w-8 items-center justify-center rounded-lg">
-                    <Icon size={16} className="text-primary-600" />
-                  </div>
-                  <div className="flex-1">
-                    <div className="text-text-primary text-sm font-medium">{meta.label}</div>
-                    <div className="text-text-muted text-xs">{meta.description}</div>
-                  </div>
-                  <Badge variant={pref.isEnabled ? "success" : "default"} size="sm">
-                    {pref.isEnabled ? "On" : "Off"}
-                  </Badge>
-                </div>
-
-                {/* Channel Toggles */}
-                <div className="border-border-default grid grid-cols-2 gap-2 border-t pt-3 sm:grid-cols-4">
-                  {CHANNELS.map((ch) => {
-                    const ChIcon = ch.icon;
-                    const isOn = pref[ch.key];
-                    return (
-                      <div key={ch.key} className="flex items-center gap-2">
-                        <Switch
-                          checked={isOn}
-                          onChange={(checked) => updatePref(pref.category, ch.key, checked)}
-                          size="sm"
-                          label=""
-                        />
-                        <ChIcon
-                          size={14}
-                          className={isOn ? "text-text-secondary" : "text-text-muted"}
-                        />
-                        <span
-                          className={`text-xs ${isOn ? "text-text-secondary" : "text-text-muted"}`}
-                        >
-                          {ch.label}
-                        </span>
+      {/* Category × Channel matrix — one row per category, one column per channel */}
+      <Card padding="sm">
+        <div className="-m-3 overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-bg-muted border-border-default border-b">
+              <tr>
+                <th className="text-text-secondary px-4 py-2.5 text-left text-xs font-medium uppercase tracking-wider">
+                  Category
+                </th>
+                {CHANNELS.map((ch) => {
+                  const ChIcon = ch.icon;
+                  return (
+                    <th
+                      key={ch.key}
+                      className="text-text-secondary px-3 py-2.5 text-center text-xs font-medium uppercase tracking-wider"
+                    >
+                      <div className="inline-flex items-center gap-1.5">
+                        <ChIcon size={13} />
+                        <span>{ch.label}</span>
                       </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </Card>
-          );
-        })}
-      </div>
+                    </th>
+                  );
+                })}
+              </tr>
+            </thead>
+            <tbody className="divide-border-default divide-y">
+              {preferences.map((pref) => {
+                const meta = CATEGORY_META[pref.category];
+                if (!meta) return null;
+                const Icon = meta.icon;
+                return (
+                  <tr key={pref.category} className="hover:bg-bg-hover">
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-3">
+                        <div className="bg-primary-100 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg">
+                          <Icon size={15} className="text-primary-600" />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="text-text-primary text-sm font-medium">
+                            {meta.label}
+                          </div>
+                          <div className="text-text-muted truncate text-xs">
+                            {meta.description}
+                          </div>
+                        </div>
+                      </div>
+                    </td>
+                    {CHANNELS.map((ch) => (
+                      <td key={ch.key} className="px-3 py-3 text-center">
+                        <div className="inline-flex">
+                          <Switch
+                            checked={pref[ch.key]}
+                            onChange={(checked) => updatePref(pref.category, ch.key, checked)}
+                            size="sm"
+                            label=""
+                          />
+                        </div>
+                      </td>
+                    ))}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </Card>
 
       {/* §11.5 — Quiet Hours */}
       <Card padding="sm">

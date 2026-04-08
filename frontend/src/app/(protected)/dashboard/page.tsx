@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { qk } from "@/lib/query-keys";
 import {
   FileText,
   CheckCircle2,
@@ -303,17 +305,38 @@ export default function DashboardPage() {
     ownIsLate: boolean;
   } | null>(null);
 
-  const fetchDashboard = useCallback(async () => {
-    try {
+  // Single combined dashboard query — runs all the parallel fetches inside
+  // and returns one bundled object. Cleaner cache invalidation, single
+  // loading state, and React Query handles deduplication.
+  const dashboardQuery = useQuery({
+    queryKey: qk.dashboard.user(),
+    queryFn: async () => {
       const [statsRes, attRes, leaveRes] = await Promise.allSettled([
         api.get<{ stats: DashboardStats }>("/dashboard/stats"),
         api.get<{ records: AttendanceInfo[] }>("/attendance/my?limit=1"),
         api.get<{ balances: LeaveBalanceInfo[] }>("/leaves/balances"),
       ]);
+      const result: {
+        stats: DashboardStats | null;
+        attendance: AttendanceInfo | null;
+        leaveBalances: LeaveBalanceInfo[];
+        dailyTrend: DailyTrend[];
+        statusBreakdown: StatusBreakdown[];
+        teamSnapshot: typeof teamSnapshot;
+        extended: ExtendedDashboard | null;
+      } = {
+        stats: null,
+        attendance: null,
+        leaveBalances: [],
+        dailyTrend: [],
+        statusBreakdown: [],
+        teamSnapshot: null,
+        extended: null,
+      };
 
       if (statsRes.status === "fulfilled") {
         const s = statsRes.value.data.stats ?? statsRes.value.data;
-        setStats({
+        result.stats = {
           candidatesToday: s.candidatesToday ?? 0,
           candidatesWeek: s.candidatesWeek ?? 0,
           candidatesMonth: s.candidatesMonth ?? 0,
@@ -321,55 +344,63 @@ export default function DashboardPage() {
           pendingReports: s.pendingReports ?? 0,
           targetValue: s.targetValue ?? 0,
           targetAchieved: s.targetAchieved ?? 0,
+          targetType: s.targetType ?? null,
           activeRecruiters: s.activeRecruiters,
-        });
+        };
       }
       if (attRes.status === "fulfilled") {
         const records = attRes.value.data.records;
-        if (records && records.length > 0) {
-          setAttendance(records[0]!);
-        }
+        if (records && records.length > 0) result.attendance = records[0]!;
       }
       if (leaveRes.status === "fulfilled") {
-        setLeaveBalances(leaveRes.value.data.balances ?? []);
+        result.leaveBalances = leaveRes.value.data.balances ?? [];
       }
 
-      // Fetch trend & breakdown (non-critical)
       try {
         const [trendRes, breakdownRes] = await Promise.allSettled([
           api.get<{ trend: DailyTrend[] }>("/dashboard/daily-trend"),
           api.get<{ breakdown: StatusBreakdown[] }>("/dashboard/status-breakdown"),
         ]);
-        if (trendRes.status === "fulfilled") setDailyTrend(trendRes.value.data.trend ?? []);
+        if (trendRes.status === "fulfilled") result.dailyTrend = trendRes.value.data.trend ?? [];
         if (breakdownRes.status === "fulfilled")
-          setStatusBreakdown(breakdownRes.value.data.breakdown ?? []);
+          result.statusBreakdown = breakdownRes.value.data.breakdown ?? [];
       } catch {
         /* chart data is supplementary */
       }
-
-      // §7 — RM team snapshot
       try {
         const snapRes = await api.get("/dashboard/rm-team-snapshot");
-        setTeamSnapshot(snapRes.data as typeof teamSnapshot);
+        result.teamSnapshot = snapRes.data as typeof teamSnapshot;
       } catch {
-        /* RM-only endpoint; silently fail for other roles */
+        /* RM-only endpoint */
       }
-
-      // Extended dashboard data
       try {
         const extRes = await api.get<{ data: ExtendedDashboard }>("/dashboard/extended");
-        setExtended(extRes.data.data ?? null);
+        result.extended = extRes.data.data ?? null;
       } catch {
         /* extended data is supplementary */
       }
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
+      return result;
+    },
+  });
 
+  // Sync the bundled query result back into the existing per-piece state
+  // setters so the rest of the page (which reads `stats`, `attendance`,
+  // etc. directly) keeps working without rewriting all consumer JSX.
   useEffect(() => {
-    void fetchDashboard();
-  }, [fetchDashboard]);
+    if (!dashboardQuery.data) return;
+    const d = dashboardQuery.data;
+    // reason: bridging react-query result into pre-existing per-piece state
+    /* eslint-disable react-hooks/set-state-in-effect */
+    setStats(d.stats);
+    setAttendance(d.attendance);
+    setLeaveBalances(d.leaveBalances);
+    setDailyTrend(d.dailyTrend);
+    setStatusBreakdown(d.statusBreakdown);
+    setTeamSnapshot(d.teamSnapshot);
+    setExtended(d.extended);
+    setIsLoading(false);
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [dashboardQuery.data]);
 
   // Live working hours counter
   useEffect(() => {
@@ -389,7 +420,7 @@ export default function DashboardPage() {
 
   const isRM = user?.role === ROLES.REPORTING_MANAGER;
   const greeting = getGreeting(user?.name);
-  const s = stats ?? {
+  const s: DashboardStats = stats ?? {
     candidatesToday: 0,
     candidatesWeek: 0,
     candidatesMonth: 0,
@@ -397,6 +428,7 @@ export default function DashboardPage() {
     pendingReports: 0,
     targetValue: 0,
     targetAchieved: 0,
+    targetType: null,
   };
 
   // Derive leave balance display
@@ -438,7 +470,13 @@ export default function DashboardPage() {
         <StatsCard label="Completion Rate" value={`${s.completionRate}%`} icon={CheckCircle2} />
         <StatsCard label="Pending Reports" value={s.pendingReports} icon={Clock} />
         <StatsCard
-          label={isRM ? "Active Recruiters" : "Target Progress"}
+          label={
+            isRM
+              ? "Active Recruiters"
+              : s.targetType
+                ? `${s.targetType[0]}${s.targetType.slice(1).toLowerCase()} Target`
+                : "Target Progress"
+          }
           value={isRM ? (s.activeRecruiters ?? 0) : `${s.targetAchieved}/${s.targetValue}`}
           icon={isRM ? TrendingUp : Target}
         />

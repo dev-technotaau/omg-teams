@@ -16,6 +16,10 @@ export const absentDetectionQueue = createQueue("absent-detection");
  * Default: 12:00 PM daily.
  */
 export async function scheduleAbsentDetection(): Promise<void> {
+  // Fixed daily 12:00 PM cron. The threshold is intentionally not exposed
+  // in the admin Settings UI — changing a cron schedule at runtime would
+  // require a backend restart to take effect, which is a footgun. If you
+  // need to shift this, edit the pattern here and redeploy.
   await absentDetectionQueue.upsertJobScheduler(
     "absent-detection-daily",
     { pattern: "0 12 * * *" },

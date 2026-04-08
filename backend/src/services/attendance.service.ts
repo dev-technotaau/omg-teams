@@ -21,6 +21,10 @@ export async function punchIn(userId: string): Promise<void> {
   const prisma = getPrisma();
   const dateKey = today();
 
+  // Admin is excluded from the attendance system entirely
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
+  if (!user || user.role === "ADMIN") return;
+
   const existing = await prisma.attendanceRecord.findUnique({
     where: { userId_date: { userId, date: dateKey } },
   });
@@ -127,6 +131,10 @@ export async function punchOut(userId: string): Promise<void> {
   const prisma = getPrisma();
   const dateKey = today();
   const now = new Date();
+
+  // Admin is excluded from the attendance system entirely
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
+  if (!user || user.role === "ADMIN") return;
 
   const record = await prisma.attendanceRecord.findUnique({
     where: { userId_date: { userId, date: dateKey } },
@@ -244,6 +252,9 @@ export async function listAllAttendance(filters: {
   if (filters.date) where.date = new Date(filters.date);
   if (filters.status) where.status = filters.status;
 
+  // Admin is excluded from attendance system entirely
+  where.user = { role: { not: "ADMIN" } };
+
   const [data, total] = await Promise.all([
     prisma.attendanceRecord.findMany({
       where,
@@ -320,12 +331,32 @@ export async function editAttendance(
   return prisma.attendanceRecord.update({ where: { id }, data: updateData });
 }
 
-// Helper: read attendance config
+// Map legacy camelCase AttendanceConfig keys → snake_case PlatformSetting keys
+// (the admin Settings page writes to PlatformSetting; we read from there first
+//  and fall back to the legacy AttendanceConfig table for backwards compat).
+const ATTENDANCE_PLATFORM_KEY: Record<string, string> = {
+  expectedLoginTime: "expected_login_time",
+  gracePeriodMinutes: "grace_period_minutes",
+  breakDeductionMinutes: "break_deduction_minutes",
+  halfDayThresholdMinutes: "half_day_threshold_minutes",
+  standardDayMinutes: "standard_day_minutes",
+  excessiveLateThreshold: "excessive_late_threshold",
+  absentThresholdMinutes: "absent_threshold_minutes",
+  workingDays: "working_days",
+};
+
+// Helper: read attendance config — prefers PlatformSetting (admin UI), falls
+// back to legacy AttendanceConfig table. Cache invalidated on either update.
 async function getAttendanceConfig(key: string): Promise<unknown> {
   return cache.getOrSet(
     `attendance_config:${key}`,
     async () => {
       const prisma = getPrisma();
+      const platformKey = ATTENDANCE_PLATFORM_KEY[key];
+      if (platformKey) {
+        const ps = await prisma.platformSetting.findUnique({ where: { key: platformKey } });
+        if (ps && ps.value !== null && ps.value !== "") return ps.value;
+      }
       const config = await prisma.attendanceConfig.findUnique({ where: { key } });
       return config?.value ?? null;
     },
