@@ -71,6 +71,11 @@ function buildCsp(nonce: string): string {
 
   // ── connect-src ──
   const connectSources = ["'self'", socketUrl, wsUrl];
+  // Cloudinary — offer letter PDFs and other uploaded files are fetched
+  // directly from res.cloudinary.com (authenticated URLs).
+  if (cloudinaryCloud) connectSources.push("https://res.cloudinary.com");
+  // R2 — documents, attachments, and other files served from R2 public URL.
+  if (r2Url) connectSources.push(r2Url);
   if (sentryDsn) connectSources.push("https://*.ingest.sentry.io");
   if (firebaseProjectId) {
     connectSources.push(
