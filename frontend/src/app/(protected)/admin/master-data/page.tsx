@@ -5,11 +5,28 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { qk } from "@/lib/query-keys";
 import { Plus, GripVertical, Pencil, ChevronUp, ChevronDown, X, Check, List } from "lucide-react";
 import { toast } from "sonner";
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { restrictToVerticalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
 import { api, extractApiError } from "@/lib/api";
 import {
   PageHeader,
   Tabs,
-  DataTable,
   Badge,
   Button,
   IconButton,
@@ -18,8 +35,8 @@ import {
   FormField,
   Input,
   Select,
+  TableSkeleton,
 } from "@/components/ui";
-import type { Column } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { useTabSearchParam } from "@/hooks";
 
@@ -101,6 +118,62 @@ interface EditFormState {
   value: string;
   zone: Zone | "";
   parentId: string;
+}
+
+// ── Sortable row wrapper — each row is draggable via the grip handle ──
+function SortableRow({
+  id,
+  children,
+  disabled,
+}: {
+  id: string;
+  children: React.ReactNode;
+  disabled?: boolean;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    setActivatorNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id, disabled });
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 50 : undefined,
+    position: isDragging ? "relative" : undefined,
+    opacity: isDragging ? 0.85 : undefined,
+  };
+
+  return (
+    <tr
+      ref={setNodeRef}
+      style={style}
+      className={cn(
+        "border-border-default border-b text-sm transition-colors last:border-b-0",
+        "hover:bg-bg-hover",
+        isDragging && "bg-bg-surface-raised shadow-lg",
+      )}
+    >
+      {/* Drag handle cell */}
+      <td className="w-10 px-2 py-2 text-center">
+        <button
+          ref={setActivatorNodeRef}
+          {...attributes}
+          {...listeners}
+          className="text-text-muted hover:text-text-primary cursor-grab touch-none rounded p-0.5 active:cursor-grabbing"
+          aria-label="Drag to reorder"
+          type="button"
+        >
+          <GripVertical size={14} />
+        </button>
+      </td>
+      {children}
+    </tr>
+  );
 }
 
 export default function MasterDataPage() {
@@ -301,181 +374,41 @@ export default function MasterDataPage() {
     });
   };
 
-  const columns = useMemo<Column<DropdownItem>[]>(() => {
-    const cols: Column<DropdownItem>[] = [
-      {
-        key: "grip",
-        header: "",
-        width: "40px",
-        cell: () => <GripVertical size={14} className="text-text-muted" />,
-      },
-      {
-        key: "label",
-        header: "Label",
-        cell: (item) =>
-          editingId === item.id ? (
-            <Input
-              value={editForm.label}
-              onChange={(e) => setEditForm((f) => ({ ...f, label: e.target.value }))}
-              size="sm"
-            />
-          ) : (
-            <span className="text-text-primary font-medium">{item.label}</span>
-          ),
-      },
-      {
-        key: "value",
-        header: "Value",
-        cell: (item) =>
-          editingId === item.id ? (
-            <Input
-              value={editForm.value}
-              onChange={(e) => setEditForm((f) => ({ ...f, value: e.target.value }))}
-              size="sm"
-            />
-          ) : (
-            <span className="text-text-secondary font-mono text-xs">{item.value}</span>
-          ),
-      },
-    ];
+  // ── DnD sensors — pointer (mouse), touch, keyboard ──
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 150, tolerance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
 
-    if (isStateTab) {
-      cols.push({
-        key: "zone",
-        header: "Zone",
-        cell: (item) =>
-          editingId === item.id ? (
-            <Select
-              size="sm"
-              value={editForm.zone}
-              onChange={(e) => setEditForm((f) => ({ ...f, zone: e.target.value as Zone | "" }))}
-              options={[{ value: "", label: "— Select zone —" }, ...ZONES]}
-            />
-          ) : item.zone ? (
-            <Badge variant={ZONE_BADGE_VARIANT[item.zone]}>{item.zone}</Badge>
-          ) : (
-            <span className="text-text-muted text-xs italic">unset</span>
-          ),
-      });
-    }
+  const handleDragEnd = useCallback(
+    async (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
 
-    if (isLocationTab) {
-      cols.push({
-        key: "parent",
-        header: "State",
-        cell: (item) => {
-          if (editingId === item.id) {
-            return (
-              <Select
-                size="sm"
-                value={editForm.parentId}
-                onChange={(e) => setEditForm((f) => ({ ...f, parentId: e.target.value }))}
-                options={stateOptions}
-              />
-            );
-          }
-          const parent = item.parentId ? stateById.get(item.parentId) : null;
-          return parent ? (
-            <span className="text-text-primary text-sm">{parent.label}</span>
-          ) : (
-            <span className="text-text-muted text-xs italic">unset</span>
-          );
-        },
-      });
-    }
+      const oldIdx = sortedItems.findIndex((i) => i.id === active.id);
+      const newIdx = sortedItems.findIndex((i) => i.id === over.id);
+      if (oldIdx === -1 || newIdx === -1) return;
 
-    cols.push(
-      {
-        key: "sortOrder",
-        header: "Order",
-        cell: (item) => <span className="text-text-muted">{item.sortOrder}</span>,
-      },
-      {
-        key: "status",
-        header: "Status",
-        cell: (item) => (
-          <button
-            onClick={() => void toggleActive(item)}
-            className={cn(
-              "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors",
-              item.isActive ? "bg-success-500" : "bg-bg-muted",
-            )}
-          >
-            <span
-              className={cn(
-                "pointer-events-none mt-0.5 inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform",
-                item.isActive ? "translate-x-[18px]" : "translate-x-0.5",
-              )}
-            />
-          </button>
-        ),
-      },
-      {
-        key: "actions",
-        header: "Actions",
-        cell: (item) => {
-          const idx = sortedItems.findIndex((i) => i.id === item.id);
-          return (
-            <div className="flex items-center gap-1">
-              {editingId === item.id ? (
-                <>
-                  <Tooltip content="Save">
-                    <IconButton
-                      icon={Check}
-                      aria-label="Save"
-                      variant="success"
-                      size="xs"
-                      onClick={() => void handleEdit(item.id)}
-                    />
-                  </Tooltip>
-                  <Tooltip content="Cancel">
-                    <IconButton
-                      icon={X}
-                      aria-label="Cancel"
-                      size="xs"
-                      onClick={() => setEditingId(null)}
-                    />
-                  </Tooltip>
-                </>
-              ) : (
-                <>
-                  <Tooltip content="Edit">
-                    <IconButton
-                      icon={Pencil}
-                      aria-label="Edit"
-                      size="xs"
-                      onClick={() => startEdit(item)}
-                    />
-                  </Tooltip>
-                  <Tooltip content="Move up">
-                    <IconButton
-                      icon={ChevronUp}
-                      aria-label="Move up"
-                      size="xs"
-                      disabled={idx === 0}
-                      onClick={() => void moveItem(item, "up")}
-                    />
-                  </Tooltip>
-                  <Tooltip content="Move down">
-                    <IconButton
-                      icon={ChevronDown}
-                      aria-label="Move down"
-                      size="xs"
-                      disabled={idx === sortedItems.length - 1}
-                      onClick={() => void moveItem(item, "down")}
-                    />
-                  </Tooltip>
-                </>
-              )}
-            </div>
-          );
-        },
-      },
-    );
+      // Build new sort order assignments: move item from oldIdx to newIdx
+      const reordered = [...sortedItems];
+      const [moved] = reordered.splice(oldIdx, 1);
+      reordered.splice(newIdx, 0, moved!);
 
-    return cols;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isStateTab, isLocationTab, editingId, editForm, sortedItems, stateById, stateOptions]);
+      // Assign sequential sort orders
+      const payload = reordered.map((item, i) => ({ id: item.id, sortOrder: i }));
+
+      try {
+        await api.post("/dropdowns/reorder", { items: payload });
+        void fetchItems();
+      } catch (err) {
+        toast.error(extractApiError(err).message);
+      }
+    },
+    [sortedItems, fetchItems],
+  );
+
+  const sortableIds = useMemo(() => sortedItems.map((i) => i.id), [sortedItems]);
 
   const activeLabel = CATEGORIES.find((c) => c.key === activeCategory)?.label ?? "";
 
@@ -569,17 +502,161 @@ export default function MasterDataPage() {
             </div>
           </Modal>
 
-          {/* Options table */}
-          <DataTable<DropdownItem>
-            columns={columns}
-            data={sortedItems}
-            loading={isLoading}
-            emptyIcon={List}
-            emptyTitle="No options yet"
-            emptyDescription={`Add options for ${activeLabel}`}
-            getRowId={(row) => row.id}
-            compact
-          />
+          {/* Options table — DnD sortable */}
+          {isLoading ? (
+            <TableSkeleton />
+          ) : sortedItems.length === 0 ? (
+            <div className="border-border-default flex flex-col items-center justify-center rounded-lg border py-12">
+              <List size={32} className="text-text-muted mb-2" />
+              <p className="text-text-primary text-sm font-medium">No options yet</p>
+              <p className="text-text-muted text-xs">Add options for {activeLabel}</p>
+            </div>
+          ) : (
+            <div className="border-border-default overflow-x-auto rounded-lg border">
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+                onDragEnd={(e) => void handleDragEnd(e)}
+              >
+                <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
+                  <table className="w-full border-collapse text-sm">
+                    <thead>
+                      <tr className="border-border-default bg-bg-muted/50 border-b">
+                        <th className="w-10 px-2 py-2" />
+                        <th className="px-3 py-2 text-left text-xs font-medium">Label</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium">Value</th>
+                        {isStateTab && <th className="px-3 py-2 text-left text-xs font-medium">Zone</th>}
+                        {isLocationTab && <th className="px-3 py-2 text-left text-xs font-medium">State</th>}
+                        <th className="px-3 py-2 text-left text-xs font-medium">Order</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium">Status</th>
+                        <th className="px-3 py-2 text-left text-xs font-medium">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sortedItems.map((item) => {
+                        const idx = sortedItems.indexOf(item);
+                        const isEditing = editingId === item.id;
+                        return (
+                          <SortableRow key={item.id} id={item.id} disabled={isEditing}>
+                            {/* Label */}
+                            <td className="px-3 py-2">
+                              {isEditing ? (
+                                <Input
+                                  value={editForm.label}
+                                  onChange={(e) => setEditForm((f) => ({ ...f, label: e.target.value }))}
+                                  size="sm"
+                                />
+                              ) : (
+                                <span className="text-text-primary font-medium">{item.label}</span>
+                              )}
+                            </td>
+                            {/* Value */}
+                            <td className="px-3 py-2">
+                              {isEditing ? (
+                                <Input
+                                  value={editForm.value}
+                                  onChange={(e) => setEditForm((f) => ({ ...f, value: e.target.value }))}
+                                  size="sm"
+                                />
+                              ) : (
+                                <span className="text-text-secondary font-mono text-xs">{item.value}</span>
+                              )}
+                            </td>
+                            {/* Zone (state tab only) */}
+                            {isStateTab && (
+                              <td className="px-3 py-2">
+                                {isEditing ? (
+                                  <Select
+                                    size="sm"
+                                    value={editForm.zone}
+                                    onChange={(e) => setEditForm((f) => ({ ...f, zone: e.target.value as Zone | "" }))}
+                                    options={[{ value: "", label: "— Select zone —" }, ...ZONES]}
+                                  />
+                                ) : item.zone ? (
+                                  <Badge variant={ZONE_BADGE_VARIANT[item.zone]}>{item.zone}</Badge>
+                                ) : (
+                                  <span className="text-text-muted text-xs italic">unset</span>
+                                )}
+                              </td>
+                            )}
+                            {/* Parent state (location tab only) */}
+                            {isLocationTab && (
+                              <td className="px-3 py-2">
+                                {isEditing ? (
+                                  <Select
+                                    size="sm"
+                                    value={editForm.parentId}
+                                    onChange={(e) => setEditForm((f) => ({ ...f, parentId: e.target.value }))}
+                                    options={stateOptions}
+                                  />
+                                ) : (() => {
+                                  const parent = item.parentId ? stateById.get(item.parentId) : null;
+                                  return parent ? (
+                                    <span className="text-text-primary text-sm">{parent.label}</span>
+                                  ) : (
+                                    <span className="text-text-muted text-xs italic">unset</span>
+                                  );
+                                })()}
+                              </td>
+                            )}
+                            {/* Sort order */}
+                            <td className="px-3 py-2">
+                              <span className="text-text-muted">{item.sortOrder}</span>
+                            </td>
+                            {/* Status toggle */}
+                            <td className="px-3 py-2">
+                              <button
+                                onClick={() => void toggleActive(item)}
+                                className={cn(
+                                  "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors",
+                                  item.isActive ? "bg-success-500" : "bg-bg-muted",
+                                )}
+                              >
+                                <span
+                                  className={cn(
+                                    "pointer-events-none mt-0.5 inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform",
+                                    item.isActive ? "translate-x-[18px]" : "translate-x-0.5",
+                                  )}
+                                />
+                              </button>
+                            </td>
+                            {/* Actions */}
+                            <td className="px-3 py-2">
+                              <div className="flex items-center gap-1">
+                                {isEditing ? (
+                                  <>
+                                    <Tooltip content="Save">
+                                      <IconButton icon={Check} aria-label="Save" variant="success" size="xs" onClick={() => void handleEdit(item.id)} />
+                                    </Tooltip>
+                                    <Tooltip content="Cancel">
+                                      <IconButton icon={X} aria-label="Cancel" size="xs" onClick={() => setEditingId(null)} />
+                                    </Tooltip>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Tooltip content="Edit">
+                                      <IconButton icon={Pencil} aria-label="Edit" size="xs" onClick={() => startEdit(item)} />
+                                    </Tooltip>
+                                    <Tooltip content="Move up">
+                                      <IconButton icon={ChevronUp} aria-label="Move up" size="xs" disabled={idx === 0} onClick={() => void moveItem(item, "up")} />
+                                    </Tooltip>
+                                    <Tooltip content="Move down">
+                                      <IconButton icon={ChevronDown} aria-label="Move down" size="xs" disabled={idx === sortedItems.length - 1} onClick={() => void moveItem(item, "down")} />
+                                    </Tooltip>
+                                  </>
+                                )}
+                              </div>
+                            </td>
+                          </SortableRow>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </SortableContext>
+              </DndContext>
+            </div>
+          )}
         </div>
       </div>
     </div>

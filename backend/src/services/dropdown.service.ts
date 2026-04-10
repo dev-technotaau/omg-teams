@@ -35,13 +35,30 @@ export async function listDropdownOptions(category: DropdownCategory) {
  */
 export async function listDropdownOptionsAdmin(category: DropdownCategory, includeInactive = true) {
   const prisma = getPrisma();
-  return prisma.dropdownOption.findMany({
+  const rows = await prisma.dropdownOption.findMany({
     where: {
       category,
       ...(includeInactive ? {} : { isActive: true }),
     },
     orderBy: { sortOrder: "asc" },
   });
+
+  // Auto-heal duplicate sortOrders left over from seeding — if any two rows
+  // share the same sortOrder, reassign sequential values and persist them.
+  const hasDupes = rows.length > 1 && rows.some((r, i) => i > 0 && r.sortOrder === rows[i - 1]!.sortOrder);
+  if (hasDupes) {
+    await Promise.all(
+      rows.map((r, i) =>
+        r.sortOrder !== i
+          ? prisma.dropdownOption.update({ where: { id: r.id }, data: { sortOrder: i } })
+          : Promise.resolve(),
+      ),
+    );
+    for (let i = 0; i < rows.length; i++) rows[i]!.sortOrder = i;
+    await cache.delPattern(`dropdown:list:${category}*`);
+  }
+
+  return rows;
 }
 
 export async function createDropdownOption(data: {
@@ -53,6 +70,16 @@ export async function createDropdownOption(data: {
   sortOrder?: number | undefined;
 }) {
   const prisma = getPrisma();
+  // Auto-assign sortOrder to end of list when not explicitly provided
+  let sortOrder = data.sortOrder;
+  if (sortOrder === undefined) {
+    const last = await prisma.dropdownOption.findFirst({
+      where: { category: data.category },
+      orderBy: { sortOrder: "desc" },
+      select: { sortOrder: true },
+    });
+    sortOrder = (last?.sortOrder ?? -1) + 1;
+  }
   const result = await prisma.dropdownOption.create({
     data: {
       category: data.category,
@@ -60,7 +87,7 @@ export async function createDropdownOption(data: {
       label: data.label,
       zone: data.zone ?? null,
       parentId: data.parentId ?? null,
-      sortOrder: data.sortOrder ?? 0,
+      sortOrder,
     },
   });
   await cache.delPattern(`dropdown:list:${data.category}*`);
