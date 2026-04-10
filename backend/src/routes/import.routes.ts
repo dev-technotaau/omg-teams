@@ -1,10 +1,12 @@
 import { Router } from "express";
 import multer from "multer";
 import {
+  handleBatchParse,
   handleDownloadImportTemplate,
   handleExecuteImport,
   handleGetImportTemplate,
   handleGetLookups,
+  handleParseCSV,
   handleParseXLSX,
   handlePreviewImport,
 } from "../controllers/import.controller.js";
@@ -37,6 +39,8 @@ router.get("/lookups", handleGetLookups);
 router.get("/template", handleGetImportTemplate);
 router.get("/template/download", handleDownloadImportTemplate);
 router.post("/parse-xlsx", upload.single("file"), handleParseXLSX);
+router.post("/parse-csv", upload.single("file"), handleParseCSV);
+router.post("/batch-parse", upload.array("files", 50), handleBatchParse);
 router.post("/preview", handlePreviewImport);
 router.post("/execute", handleExecuteImport);
 

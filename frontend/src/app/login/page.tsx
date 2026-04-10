@@ -100,9 +100,8 @@ export default function LoginPage() {
     trigger,
   } = useForm<LoginForm>({
     resolver: zodResolver(loginSchema),
-    // Validate after the user has interacted with a field (blur), then keep
-    // validating on every change so errors update live as they type.
-    mode: "onTouched",
+    // Only show validation errors after the user clicks Login.
+    mode: "onSubmit",
     reValidateMode: "onChange",
   });
 
@@ -171,10 +170,15 @@ export default function LoginPage() {
     [reset],
   );
 
-  // When the user switches tabs without resetting (edge case), still
-  // re-validate so the format error updates immediately.
+  // When the user switches tabs, re-validate only if the identifier field
+  // already has a validation error (i.e. the user interacted with it).
+  // Without this guard the effect fires on mount and shows "required" on a
+  // pristine form.
   useEffect(() => {
-    void trigger("identifier");
+    if (formErrors.identifier) {
+      void trigger("identifier");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-run on tab change, not on formErrors change
   }, [activeTab, trigger]);
 
   // Submit the password login. Extracted into its own function (rather than

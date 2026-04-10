@@ -82,7 +82,12 @@ export async function registerMessagingSW(): Promise<ServiceWorkerRegistration |
   if (swRegistration) return swRegistration;
 
   try {
-    const registration = await navigator.serviceWorker.register("/firebase-messaging-sw.js");
+    // Use a dedicated scope so this SW doesn't collide with the main /sw.js
+    // (both registering at root scope causes them to clobber each other on
+    // every load and retriggers the "Update available" banner forever).
+    const registration = await navigator.serviceWorker.register("/firebase-messaging-sw.js", {
+      scope: "/firebase-cloud-messaging-push-scope",
+    });
     swRegistration = registration;
 
     // Pass Firebase config to the SW via postMessage

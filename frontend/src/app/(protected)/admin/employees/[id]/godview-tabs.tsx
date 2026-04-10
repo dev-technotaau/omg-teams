@@ -83,6 +83,20 @@ function usePaginatedList<T>(url: string | null) {
   };
 }
 
+/** Shared error banner for godview tabs */
+function TabError({ message, onRetry }: { message: string; onRetry?: () => void }) {
+  return (
+    <div className="border-error-200 bg-error-50 dark:border-error-800 dark:bg-error-950/30 flex items-center justify-between gap-3 rounded-lg border p-4">
+      <p className="text-error-700 dark:text-error-400 text-sm">{message}</p>
+      {onRetry && (
+        <Button variant="outline" size="sm" onClick={onRetry}>
+          Retry
+        </Button>
+      )}
+    </div>
+  );
+}
+
 function fmtDate(d: string | null | undefined) {
   if (!d) return "\u2014";
   return new Date(d).toLocaleString("en-IN", {
@@ -109,7 +123,7 @@ interface AdminSession {
 }
 
 function SessionsTab({ userId }: { userId: string }) {
-  const { data, loading, reload } = usePaginatedList<AdminSession>(
+  const { data, loading, error, reload } = usePaginatedList<AdminSession>(
     `/admin/sessions?userId=${userId}`,
   );
   const revoke = async (id: string) => {
@@ -142,6 +156,7 @@ function SessionsTab({ userId }: { userId: string }) {
     },
   ];
   if (loading) return <TableSkeleton />;
+  if (error) return <TabError message={error} onRetry={reload} />;
   return <DataTable columns={cols} data={data} emptyTitle="No active sessions" />;
 }
 
@@ -158,7 +173,7 @@ interface LoginAttempt {
 }
 
 function LoginHistoryTab({ userId }: { userId: string }) {
-  const { data, loading } = usePaginatedList<LoginAttempt>(`/users/${userId}/login-history`);
+  const { data, loading, error, reload } = usePaginatedList<LoginAttempt>(`/users/${userId}/login-history`);
   const cols: Column<LoginAttempt>[] = [
     { key: "createdAt", header: "When", cell: (r) => fmtDate(r.createdAt) },
     {
@@ -177,6 +192,7 @@ function LoginHistoryTab({ userId }: { userId: string }) {
     },
   ];
   if (loading) return <TableSkeleton />;
+  if (error) return <TabError message={error} onRetry={reload} />;
   return <DataTable columns={cols} data={data} emptyTitle="No login attempts recorded" />;
 }
 
@@ -192,7 +208,7 @@ interface AuditEntry {
 }
 
 function AuditTab({ userId }: { userId: string }) {
-  const { data, loading } = usePaginatedList<AuditEntry>(`/audit-logs?userId=${userId}`);
+  const { data, loading, error, reload } = usePaginatedList<AuditEntry>(`/audit-logs?userId=${userId}`);
   const cols: Column<AuditEntry>[] = [
     { key: "timestamp", header: "When", cell: (r) => fmtDate(r.timestamp) },
     { key: "action", header: "Action", cell: (r) => <Badge variant="default">{r.action}</Badge> },
@@ -201,6 +217,7 @@ function AuditTab({ userId }: { userId: string }) {
     { key: "ipAddress", header: "IP", cell: (r) => r.ipAddress ?? "\u2014" },
   ];
   if (loading) return <TableSkeleton />;
+  if (error) return <TabError message={error} onRetry={reload} />;
   return (
     <DataTable
       columns={cols}
@@ -245,7 +262,7 @@ interface NotifRow {
 }
 
 function NotificationsTab({ userId }: { userId: string }) {
-  const { data, loading } = usePaginatedList<NotifRow>(`/users/${userId}/notifications`);
+  const { data, loading, error, reload } = usePaginatedList<NotifRow>(`/users/${userId}/notifications`);
   const cols: Column<NotifRow>[] = [
     { key: "createdAt", header: "When", cell: (r) => fmtDate(r.createdAt) },
     { key: "type", header: "Type", cell: (r) => <Badge variant="default">{r.type}</Badge> },
@@ -263,6 +280,7 @@ function NotificationsTab({ userId }: { userId: string }) {
     },
   ];
   if (loading) return <TableSkeleton />;
+  if (error) return <TabError message={error} onRetry={reload} />;
   return <DataTable columns={cols} data={data} emptyTitle="No notifications" />;
 }
 
@@ -314,6 +332,7 @@ function SecurityTab({ userId }: { userId: string }) {
   };
 
   if (loading || !info) return <TableSkeleton />;
+  if (securityQuery.error) return <TabError message={(securityQuery.error as Error).message} onRetry={() => void load()} />;
   return (
     <div className="space-y-4">
       <div className="border-border-default flex items-start justify-between gap-4 rounded-lg border p-4">
@@ -376,7 +395,7 @@ interface TargetRow {
 }
 
 function TargetsTab({ userId }: { userId: string }) {
-  const { data, loading } = usePaginatedList<TargetRow>(`/targets?recruiterId=${userId}`);
+  const { data, loading, error, reload } = usePaginatedList<TargetRow>(`/targets?recruiterId=${userId}`);
   const cols: Column<TargetRow>[] = [
     { key: "targetType", header: "Type", cell: (r) => <Badge variant="default">{r.targetType}</Badge> },
     { key: "targetValue", header: "Value", cell: (r) => r.targetValue },
@@ -393,6 +412,7 @@ function TargetsTab({ userId }: { userId: string }) {
     },
   ];
   if (loading) return <TableSkeleton />;
+  if (error) return <TabError message={error} onRetry={reload} />;
   return <DataTable columns={cols} data={data} emptyTitle="No targets assigned" />;
 }
 
@@ -406,7 +426,7 @@ interface OfferLetterRow {
 }
 
 function OfferLettersTab({ userId }: { userId: string }) {
-  const { data, loading } = usePaginatedList<OfferLetterRow>(`/offer-letters?userId=${userId}`);
+  const { data, loading, error, reload } = usePaginatedList<OfferLetterRow>(`/offer-letters?userId=${userId}`);
   const cols: Column<OfferLetterRow>[] = [
     { key: "referenceNumber", header: "Reference", cell: (r) => <code className="text-xs">{r.referenceNumber}</code> },
     { key: "variant", header: "Variant", cell: (r) => <Badge variant="default">{r.variant}</Badge> },
@@ -422,6 +442,7 @@ function OfferLettersTab({ userId }: { userId: string }) {
     },
   ];
   if (loading) return <TableSkeleton />;
+  if (error) return <TabError message={error} onRetry={reload} />;
   return <DataTable columns={cols} data={data} emptyTitle="No offer letters generated" />;
 }
 
@@ -506,6 +527,8 @@ function HistoryTab({ userId }: { userId: string }) {
         <h3 className="text-text-primary mb-2 text-sm font-semibold">Leave Balance History</h3>
         {leave.loading ? (
           <TableSkeleton />
+        ) : leave.error ? (
+          <TabError message={leave.error} onRetry={leave.reload} />
         ) : (
           <DataTable columns={leaveCols} data={leave.data} emptyTitle="No leave balance changes" />
         )}
@@ -514,6 +537,8 @@ function HistoryTab({ userId }: { userId: string }) {
         <h3 className="text-text-primary mb-2 text-sm font-semibold">Document History</h3>
         {docs.loading ? (
           <TableSkeleton />
+        ) : docs.error ? (
+          <TabError message={docs.error} onRetry={docs.reload} />
         ) : (
           <DataTable columns={docCols} data={docs.data} emptyTitle="No document changes" />
         )}
@@ -522,6 +547,8 @@ function HistoryTab({ userId }: { userId: string }) {
         <h3 className="text-text-primary mb-2 text-sm font-semibold">Password History</h3>
         {pwd.loading ? (
           <TableSkeleton />
+        ) : pwd.error ? (
+          <TabError message={pwd.error} onRetry={pwd.reload} />
         ) : (
           <DataTable columns={pwdCols} data={pwd.data} emptyTitle="No password changes" />
         )}
@@ -543,7 +570,7 @@ interface WebhookRow {
 }
 
 function WebhooksTab({ userId }: { userId: string }) {
-  const { data, loading, reload } = usePaginatedList<WebhookRow>(
+  const { data, loading, error, reload } = usePaginatedList<WebhookRow>(
     `/users/${userId}/webhook-subscriptions`,
   );
   const [showCreate, setShowCreate] = useState(false);
@@ -639,6 +666,8 @@ function WebhooksTab({ userId }: { userId: string }) {
       </div>
       {loading ? (
         <TableSkeleton />
+      ) : error ? (
+        <TabError message={error} onRetry={reload} />
       ) : (
         <DataTable columns={cols} data={data} emptyTitle="No webhooks configured" />
       )}
@@ -702,7 +731,7 @@ interface ImpRow {
 }
 
 function ImpersonationTab({ userId }: { userId: string }) {
-  const { data, loading, reload } = usePaginatedList<ImpRow>(
+  const { data, loading, error, reload } = usePaginatedList<ImpRow>(
     `/users/${userId}/impersonation-sessions`,
   );
   const [showStart, setShowStart] = useState(false);
@@ -766,6 +795,8 @@ function ImpersonationTab({ userId }: { userId: string }) {
       </div>
       {loading ? (
         <TableSkeleton />
+      ) : error ? (
+        <TabError message={error} onRetry={reload} />
       ) : (
         <DataTable columns={cols} data={data} emptyTitle="No impersonation sessions" />
       )}
@@ -844,6 +875,8 @@ function PreferencesTab({ userId }: { userId: string }) {
         <h3 className="text-text-primary mb-2 text-sm font-semibold">Table Preferences</h3>
         {prefs.loading ? (
           <TableSkeleton />
+        ) : prefs.error ? (
+          <TabError message={prefs.error} onRetry={prefs.reload} />
         ) : (
           <DataTable columns={prefCols} data={prefs.data} emptyTitle="No saved table preferences" />
         )}
@@ -852,6 +885,8 @@ function PreferencesTab({ userId }: { userId: string }) {
         <h3 className="text-text-primary mb-2 text-sm font-semibold">Filter Presets</h3>
         {presets.loading ? (
           <TableSkeleton />
+        ) : presets.error ? (
+          <TabError message={presets.error} onRetry={presets.reload} />
         ) : (
           <DataTable columns={presetCols} data={presets.data} emptyTitle="No saved filter presets" />
         )}
@@ -871,7 +906,7 @@ interface ArchiveRow {
 }
 
 function ArchiveTab({ userId }: { userId: string }) {
-  const { data, loading } = usePaginatedList<ArchiveRow>(`/users/${userId}/archive-entries`);
+  const { data, loading, error, reload } = usePaginatedList<ArchiveRow>(`/users/${userId}/archive-entries`);
   const cols: Column<ArchiveRow>[] = [
     { key: "archivedAt", header: "Archived", cell: (r) => fmtDate(r.archivedAt) },
     { key: "entityType", header: "Type", cell: (r) => <Badge variant="default">{r.entityType}</Badge> },
@@ -888,6 +923,7 @@ function ArchiveTab({ userId }: { userId: string }) {
     },
   ];
   if (loading) return <TableSkeleton />;
+  if (error) return <TabError message={error} onRetry={reload} />;
   return <DataTable columns={cols} data={data} emptyTitle="No archive entries" />;
 }
 

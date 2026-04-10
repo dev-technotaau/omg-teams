@@ -440,11 +440,15 @@ export async function login(input: LoginInput, res: Response): Promise<LoginResu
     );
   }
 
-  // Step 1: Validate Turnstile captcha
-  const turnstileValid = await verifyTurnstile(input.turnstileToken, input.ipAddress);
-  if (!turnstileValid) {
-    await logLoginAttempt(null, input, false, "Captcha verification failed");
-    throw new UnauthorizedError("Captcha verification failed", ErrorCode.INVALID_CREDENTIALS);
+  // Step 1: Validate Turnstile captcha (skip on session-conflict retry —
+  // the token was already consumed on the first attempt that returned
+  // SESSION_EXISTS, so re-validating the same single-use token always fails).
+  if (!input.confirmReplaceSession) {
+    const turnstileValid = await verifyTurnstile(input.turnstileToken, input.ipAddress);
+    if (!turnstileValid) {
+      await logLoginAttempt(null, input, false, "Captcha verification failed");
+      throw new UnauthorizedError("Captcha verification failed", ErrorCode.INVALID_CREDENTIALS);
+    }
   }
 
   // Step 3: Credential lookup — find user by Employee ID (Recruiter/RM) or email (Admin)

@@ -105,16 +105,64 @@ export async function executeImport(
   return res.data.data;
 }
 
+export interface ParseXlsxResult {
+  headers: string[];
+  rows: Array<Record<string, unknown>>;
+  totalRows: number;
+  /** Per-column mapping report: which uploaded header mapped to which field key */
+  columnMapping?: Array<{ uploaded: string; mappedTo: string | null }>;
+  /** Uploaded headers that couldn't be matched to any known field */
+  unmappedHeaders?: string[];
+  /** Required fields not found in any uploaded column */
+  missingRequiredFields?: string[];
+}
+
 /** POST /import/parse-xlsx — server-side XLSX parser */
-export async function parseXlsx(
-  file: File,
-): Promise<{ headers: string[]; rows: Array<Record<string, unknown>>; totalRows: number }> {
+export async function parseXlsx(file: File): Promise<ParseXlsxResult> {
   const form = new FormData();
   form.append("file", file);
-  const res = await api.post<{
-    data: { headers: string[]; rows: Array<Record<string, unknown>>; totalRows: number };
-  }>("/import/parse-xlsx", form, {
+  const res = await api.post<{ data: ParseXlsxResult }>("/import/parse-xlsx", form, {
     headers: { "Content-Type": "multipart/form-data" },
   });
   return res.data.data;
 }
+
+/** POST /import/parse-csv — server-side CSV parser with alias-based header resolution */
+export async function parseCsv(file: File): Promise<ParseXlsxResult> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await api.post<{ data: ParseXlsxResult }>("/import/parse-csv", form, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+  return res.data.data;
+}
+
+// ── Batch import types ──
+
+export interface BatchParsedFile {
+  fileName: string;
+  fileSize: number;
+  status: "parsed" | "error";
+  data?: ParseXlsxResult;
+  error?: string;
+  /** Present when this entry was auto-merged from multiple source files */
+  mergedFrom?: string[];
+}
+
+export interface BatchParseResponse {
+  files: BatchParsedFile[];
+}
+
+/** POST /import/batch-parse — parse multiple files at once */
+export async function batchParse(files: File[]): Promise<BatchParseResponse> {
+  const form = new FormData();
+  for (const f of files) {
+    form.append("files", f);
+  }
+  const res = await api.post<{ data: BatchParseResponse }>("/import/batch-parse", form, {
+    headers: { "Content-Type": "multipart/form-data" },
+    timeout: 120_000, // 2 min for large batches
+  });
+  return res.data.data;
+}
+
