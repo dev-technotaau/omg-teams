@@ -24,6 +24,7 @@ export async function handleUploadDocument(req: Request, res: Response): Promise
       fileSize: z.number(),
       mimeType: z.string(),
       storageKey: z.string(),
+      storageBackend: z.enum(["CLOUDINARY", "R2"]).optional(),
       fileHash: z.string().optional(),
     })
     .parse(req.body);
@@ -154,9 +155,11 @@ export async function handleViewDocument(req: Request, res: Response): Promise<v
     return;
   }
 
-  // Generate signed URL with Content-Disposition: attachment for security
+  // Generate signed URL with Content-Disposition: attachment for security.
+  // Pass the explicit backend so we never have to guess from the key shape.
   const { getSignedDownloadUrl } = await import("../utils/signed-url.js");
   const signedUrl = await getSignedDownloadUrl(doc.storageKey, {
+    backend: doc.storageBackend,
     contentDisposition: `attachment; filename="${doc.fileName}"`,
     resourceType: doc.mimeType?.startsWith("image/") ? "image" : "raw",
   });

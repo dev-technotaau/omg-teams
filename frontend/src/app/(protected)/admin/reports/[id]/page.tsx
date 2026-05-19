@@ -16,6 +16,7 @@ import {
   Input,
   PhoneInput,
   Select,
+  Combobox,
   DatePicker,
   Textarea,
   Spinner,
@@ -25,7 +26,11 @@ import type { SelectOption } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { updateCandidate } from "@/services/candidate.service";
-import { getDropdownOptions, type DropdownOption } from "@/services/dropdown.service";
+import {
+  getDropdownOptions,
+  createDropdownOption,
+  type DropdownOption,
+} from "@/services/dropdown.service";
 import { useTabSearchParam } from "@/hooks";
 
 const REPORT_DETAIL_TAB_IDS = ["all", "candidate", "recruitment", "mis"] as const;
@@ -284,6 +289,9 @@ export default function CandidateDetailPage() {
   const [stateOptions, setStateOptions] = useState<DropdownOption[]>([]);
   const [locationOptions, setLocationOptions] = useState<DropdownOption[]>([]);
   const [profileOptions, setProfileOptions] = useState<DropdownOption[]>([]);
+  const [qualificationOptions, setQualificationOptions] = useState<DropdownOption[]>([]);
+  const [noticePeriodOptions, setNoticePeriodOptions] = useState<DropdownOption[]>([]);
+  const [diplomaOptions, setDiplomaOptions] = useState<DropdownOption[]>([]);
   const companies = allCompanies; // alias for options
   const selectedCompanyId = formData.companyId as string | undefined;
 
@@ -408,20 +416,33 @@ export default function CandidateDetailPage() {
     await stageHistoryQuery.refetch();
   }, [stageHistoryQuery]);
 
-  // §9 — Fetch companies with nested SPs and HRs in one call
+  // §9 + §23.19 — Fetch companies (with nested SPs/HRs) + every dropdown
+  // master-data list the form needs in one batched call.
   const lookupsQuery = useQuery({
     queryKey: ["report-detail-lookups"] as const,
     queryFn: async () => {
-      const [companiesRes, states, locations, profiles] = await Promise.all([
-        api
-          .get<{ companies: CompanyWithRelations[] }>("/companies")
-          .then((r) => r.data.companies ?? [])
-          .catch(() => [] as CompanyWithRelations[]),
-        getDropdownOptions("STATE").catch(() => [] as DropdownOption[]),
-        getDropdownOptions("LOCATION").catch(() => [] as DropdownOption[]),
-        getDropdownOptions("PROFILE").catch(() => [] as DropdownOption[]),
-      ]);
-      return { companies: companiesRes, states, locations, profiles };
+      const [companiesRes, states, locations, profiles, qualifications, noticePeriods, diplomas] =
+        await Promise.all([
+          api
+            .get<{ companies: CompanyWithRelations[] }>("/companies")
+            .then((r) => r.data.companies ?? [])
+            .catch(() => [] as CompanyWithRelations[]),
+          getDropdownOptions("STATE").catch(() => [] as DropdownOption[]),
+          getDropdownOptions("LOCATION").catch(() => [] as DropdownOption[]),
+          getDropdownOptions("PROFILE").catch(() => [] as DropdownOption[]),
+          getDropdownOptions("QUALIFICATION").catch(() => [] as DropdownOption[]),
+          getDropdownOptions("NOTICE_PERIOD").catch(() => [] as DropdownOption[]),
+          getDropdownOptions("DIPLOMA").catch(() => [] as DropdownOption[]),
+        ]);
+      return {
+        companies: companiesRes,
+        states,
+        locations,
+        profiles,
+        qualifications,
+        noticePeriods,
+        diplomas,
+      };
     },
     staleTime: 5 * 60 * 1000,
   });
@@ -431,6 +452,9 @@ export default function CandidateDetailPage() {
       setStateOptions(lookupsQuery.data.states);
       setLocationOptions(lookupsQuery.data.locations);
       setProfileOptions(lookupsQuery.data.profiles);
+      setQualificationOptions(lookupsQuery.data.qualifications);
+      setNoticePeriodOptions(lookupsQuery.data.noticePeriods);
+      setDiplomaOptions(lookupsQuery.data.diplomas);
     }
   }, [lookupsQuery.data]);
   const fetchLookups = useCallback(async () => {
@@ -645,6 +669,89 @@ export default function CandidateDetailPage() {
     </FormField>
   );
 
+  // §23.19 — Non-creatable master-data select. Used for fields whose option
+  // list is admin-curated (qualification, notice period, diploma type) — the
+  // admin can still add/edit options via the master-data page, but the
+  // candidate edit form just picks from the list. Falls back to a plain
+  // text input until the master-data list has at least one row, so the form
+  // remains usable even when admins haven't configured the dropdown yet.
+  const renderMasterDataSelect = (
+    field: string,
+    label: string,
+    options: DropdownOption[],
+    placeholder: string,
+  ) => (
+    <FormField label={label} htmlFor={field}>
+      {options.length > 0 ? (
+        <Select
+          id={field}
+          value={String(formData[field] ?? "")}
+          onChange={(e) => updateField(field, e.target.value)}
+          disabled={!isEditing}
+          searchable
+          options={[
+            { value: "", label: placeholder },
+            ...options.map((o) => ({ value: o.value, label: o.label })),
+          ]}
+        />
+      ) : (
+        <Input
+          id={field}
+          value={String(formData[field] ?? "")}
+          onChange={(e) => updateField(field, e.target.value)}
+          disabled={!isEditing}
+          placeholder={placeholder}
+        />
+      )}
+    </FormField>
+  );
+
+  // §23.19 — Backfillable combobox: type-to-search with "+ Add" footer.
+  // Used for Location + Profile so admins can add a missing option inline
+  // without leaving the candidate edit screen.
+  const renderCombobox = (
+    field: string,
+    label: string,
+    options: { value: string; label: string }[],
+    opts: {
+      creatable: boolean;
+      category: string;
+      parentId?: string | null;
+      placeholder?: string;
+      disabled?: boolean;
+      createDisabledReason?: string | null;
+      required?: boolean;
+    },
+  ) => (
+    <FormField label={label} htmlFor={field} required={opts.required}>
+      <Combobox
+        id={field}
+        value={String(formData[field] ?? "")}
+        onChange={(next) => updateField(field, next)}
+        options={options}
+        placeholder={opts.placeholder}
+        disabled={!isEditing || opts.disabled}
+        creatable={opts.creatable}
+        createDisabledReason={opts.createDisabledReason ?? null}
+        onCreate={async (label) => {
+          try {
+            const created = await createDropdownOption({
+              category: opts.category,
+              label,
+              parentId: opts.parentId ?? null,
+            });
+            await fetchLookups();
+            toast.success(`Added ${opts.category.toLowerCase()} "${created.label}"`);
+            return created.label;
+          } catch (err) {
+            toast.error(`Could not add ${opts.category.toLowerCase()}`);
+            throw err;
+          }
+        }}
+      />
+    </FormField>
+  );
+
   const renderDatePicker = (field: string, label: string) => (
     <FormField label={label} htmlFor={field}>
       <DatePicker
@@ -688,8 +795,10 @@ export default function CandidateDetailPage() {
 
   // ── Tab sections ──
 
-  // §6.1.1 Tab 2 — Candidate (Personal & Qualification Details)
-  // Fields: #2,3,4,5,6,12,22,23,13,15,16,17,18,19,20,21,25
+  // §6.1.1 Tab 2 — Candidate (Personal, Education & Employment Details)
+  // Per UX feedback, the Employment Details subsection lives here next to
+  // Education rather than under Recruitment — it describes who the candidate
+  // is professionally, not the agency-side recruitment workflow.
   const candidateInfoSection = (
     <div className="space-y-6">
       <div>
@@ -710,17 +819,22 @@ export default function CandidateDetailPage() {
             ],
             { searchable: true },
           )}
-          {renderSelect(
+          {renderCombobox(
             "location",
             "Location",
-            [
-              {
-                value: "",
-                label: selectedStateId ? "Select location" : "Select a state first",
-              },
-              ...filteredLocations.map((l) => ({ value: l.value, label: l.label })),
-            ],
-            { searchable: true },
+            filteredLocations.map((l) => ({ value: l.value, label: l.label })),
+            {
+              creatable: !!selectedStateId,
+              category: "LOCATION",
+              parentId: selectedStateId,
+              placeholder: selectedStateId
+                ? "Type to search or add a new location..."
+                : "Select a state first",
+              disabled: !selectedStateId,
+              createDisabledReason: !selectedStateId
+                ? "Select a state before adding a location"
+                : null,
+            },
           )}
           {renderDatePicker("dateOfBirth", "Date of Birth")}
           {/* §5.2 #23 — Age auto-calculated from DOB (read-only) */}
@@ -740,8 +854,18 @@ export default function CandidateDetailPage() {
           Education
         </h3>
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          {renderInput("higherQualification", "Higher Qualification")}
-          {renderInput("diplomaPartFull", "Diploma (Part/Full)")}
+          {renderMasterDataSelect(
+            "higherQualification",
+            "Higher Qualification",
+            qualificationOptions,
+            "Select qualification",
+          )}
+          {renderMasterDataSelect(
+            "diplomaPartFull",
+            "Diploma (Part/Full)",
+            diplomaOptions,
+            "Select diploma type",
+          )}
           {renderInput("graduationPercent", "Graduation %")}
           {renderInput("graduationYear", "Graduation Year")}
           {renderInput("twelfthPassingYear", "12th Passing Year")}
@@ -753,40 +877,36 @@ export default function CandidateDetailPage() {
 
       <div>
         <h3 className="text-text-muted mb-4 text-sm font-semibold tracking-wider uppercase">
-          Remarks
-        </h3>
-        <div className="grid grid-cols-1 gap-4">{renderTextarea("remarks", "Remarks")}</div>
-      </div>
-    </div>
-  );
-
-  // §6.1.1 Tab 3 — Recruitment (Screening, Employment & HR Feedback)
-  // Fields: #7-11,14,24,26-30,31,32,33,pipeline,34-39,47,48
-  const recruitmentSection = (
-    <div className="space-y-6">
-      <div>
-        <h3 className="text-text-muted mb-4 text-sm font-semibold tracking-wider uppercase">
           Employment Details
         </h3>
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          {renderSelect(
+          {renderCombobox(
             "profile",
             "Profile",
-            [
-              { value: "", label: "Select profile" },
-              ...profileOptions.map((p) => ({ value: p.value, label: p.label })),
-            ],
-            { searchable: true },
+            profileOptions.map((p) => ({ value: p.value, label: p.label })),
+            {
+              creatable: true,
+              category: "PROFILE",
+              placeholder: "Type to search or add a new profile...",
+            },
           )}
           {renderInput("yearsOfExperience", "Years of Experience", { type: "number" })}
           {renderInput("currentCtc", "Current CTC")}
           {renderInput("expectedCtc", "Expected CTC")}
           {renderInput("currentDesignation", "Current Designation")}
           {renderInput("currentOrganization", "Current Organization")}
-          {renderInput("noticePeriod", "Notice Period")}
+          {renderMasterDataSelect(
+            "noticePeriod",
+            "Notice Period",
+            noticePeriodOptions,
+            "Select notice period",
+          )}
         </div>
       </div>
 
+      {/* Screening / Assessment — also moved out of Recruitment because it
+          describes the candidate's own answers, not the recruitment workflow.
+          Visibility still depends on zone set (§8). */}
       {isZoneA ? (
         <div>
           <h3 className="text-text-muted mb-4 text-sm font-semibold tracking-wider uppercase">
@@ -814,6 +934,21 @@ export default function CandidateDetailPage() {
         </div>
       )}
 
+      <div>
+        <h3 className="text-text-muted mb-4 text-sm font-semibold tracking-wider uppercase">
+          Remarks
+        </h3>
+        <div className="grid grid-cols-1 gap-4">{renderTextarea("remarks", "Remarks")}</div>
+      </div>
+    </div>
+  );
+
+  // §6.1.1 Tab 3 — Recruitment (Recruiter, Company & HR Feedback)
+  // Employment Details and Screening/Assessment now live on the Candidate tab
+  // (see candidateInfoSection above) — they describe the candidate, not the
+  // recruitment workflow.
+  const recruitmentSection = (
+    <div className="space-y-6">
       <div>
         <h3 className="text-text-muted mb-4 text-sm font-semibold tracking-wider uppercase">
           Recruiter & Status
@@ -876,30 +1011,10 @@ export default function CandidateDetailPage() {
 
   const misInvoiceSection = (
     <div className="space-y-6">
-      <div>
-        <h3 className="text-text-muted mb-4 text-sm font-semibold tracking-wider uppercase">
-          Context
-        </h3>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          {/* Read-only context fields so admin knows which candidate */}
-          {renderInput("candidateName", "Candidate Name", { disabled: true })}
-          <FormField label="Company" htmlFor="mis-company">
-            <Input id="mis-company" value={candidate?.company?.name ?? "Not assigned"} disabled />
-          </FormField>
-          <FormField label="Service Provider" htmlFor="mis-sp">
-            <Input
-              id="mis-sp"
-              value={candidate?.serviceProvider?.name ?? "Not assigned"}
-              disabled
-            />
-          </FormField>
-          <FormField label="HR Manager" htmlFor="mis-hr">
-            <Input id="mis-hr" value={candidate?.hrManager?.name ?? "Not assigned"} disabled />
-          </FormField>
-          {renderDatePicker("dateOfJoining", "Date of Joining")}
-        </div>
-      </div>
-
+      {/* No Context block here — the page header already shows the candidate
+          name, zone, recruiter and GSN; Company / SP / HR / Date of Joining
+          are one tab away on Recruitment. Keeps the MIS surface focused on
+          finance only. */}
       <div>
         <h3 className="text-text-muted mb-4 text-sm font-semibold tracking-wider uppercase">
           Invoice Details

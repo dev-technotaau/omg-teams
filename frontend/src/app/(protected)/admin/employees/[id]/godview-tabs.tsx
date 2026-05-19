@@ -21,6 +21,7 @@ import {
   FileOutput,
   Target as TargetIcon,
   ListChecks,
+  CheckSquare,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { DataTable, TableSkeleton, Badge, Button, Modal, FormField, Input, Textarea } from "@/components/ui";
@@ -34,6 +35,7 @@ export const GODVIEW_TAB_IDS = [
   "notifications",
   "security",
   "targets",
+  "tasks",
   "offer-letters",
   "history",
   "webhooks",
@@ -51,6 +53,7 @@ export const GODVIEW_TAB_ITEMS = [
   { id: "notifications" as const, label: "Notifications", icon: Bell },
   { id: "security" as const, label: "Security", icon: ShieldCheck },
   { id: "targets" as const, label: "Targets", icon: TargetIcon },
+  { id: "tasks" as const, label: "Tasks", icon: CheckSquare },
   { id: "offer-letters" as const, label: "Offer Letters", icon: FileOutput },
   { id: "history" as const, label: "History", icon: History },
   { id: "webhooks" as const, label: "Webhooks", icon: Webhook },
@@ -64,7 +67,10 @@ export const GODVIEW_TAB_ITEMS = [
 // background refetch, and dedup all come from React Query. The query key
 // is the URL itself which is sufficient since each tab's data is unique
 // to the user being viewed (the userId is in the URL).
-function usePaginatedList<T>(url: string | null) {
+function usePaginatedList<T>(
+  url: string | null,
+  options?: { refetchInterval?: number },
+) {
   const query = useQuery({
     queryKey: ["godview", url] as const,
     queryFn: async () => {
@@ -73,6 +79,7 @@ function usePaginatedList<T>(url: string | null) {
       return res.data.data ?? [];
     },
     enabled: !!url,
+    ...(options?.refetchInterval && { refetchInterval: options.refetchInterval }),
   });
   const reload = useCallback(() => query.refetch(), [query]);
   return {
@@ -201,7 +208,7 @@ interface AuditEntry {
   id: string;
   action: string;
   entityType: string;
-  entityId: string;
+  entityId: string | null;
   changes: unknown;
   ipAddress: string | null;
   timestamp: string;
@@ -213,7 +220,13 @@ function AuditTab({ userId }: { userId: string }) {
     { key: "timestamp", header: "When", cell: (r) => fmtDate(r.timestamp) },
     { key: "action", header: "Action", cell: (r) => <Badge variant="default">{r.action}</Badge> },
     { key: "entityType", header: "Entity", cell: (r) => r.entityType.replace(/_/g, " ") },
-    { key: "entityId", header: "Entity ID", cell: (r) => <code className="text-xs">{r.entityId.slice(0, 10)}</code> },
+    {
+      key: "entityId",
+      header: "Entity ID",
+      // entityId is nullable in AuditLog \u2014 LOGIN/LOGOUT actions have no entity
+      cell: (r) =>
+        r.entityId ? <code className="text-xs">{r.entityId.slice(0, 10)}</code> : "\u2014",
+    },
     { key: "ipAddress", header: "IP", cell: (r) => r.ipAddress ?? "\u2014" },
   ];
   if (loading) return <TableSkeleton />;
@@ -232,7 +245,7 @@ function AuditTab({ userId }: { userId: string }) {
           </div>
           <div>
             <div className="text-text-muted text-xs uppercase tracking-wider">Entity ID</div>
-            <code className="text-text-primary text-xs">{r.entityId}</code>
+            <code className="text-text-primary text-xs">{r.entityId ?? "—"}</code>
           </div>
           <div>
             <div className="text-text-muted text-xs uppercase tracking-wider">IP Address</div>
@@ -338,7 +351,7 @@ function SecurityTab({ userId }: { userId: string }) {
       <div className="border-border-default flex items-start justify-between gap-4 rounded-lg border p-4">
         <div>
           <div className="text-text-muted text-xs uppercase tracking-wider">MFA Status</div>
-          <div className="mt-1 flex items-center gap-2">
+          <div className="mt-2.5 flex items-center gap-2">
             <Badge variant={info.mfaEnrolled ? "success" : "warning"}>
               {info.mfaEnrolled ? "Enrolled" : "Not Enrolled"}
             </Badge>
@@ -388,27 +401,128 @@ interface TargetRow {
   id: string;
   targetType: string;
   targetValue: number;
+  /** Candidates this recruiter has submitted within the current period
+   *  for the target's type (DAILY → today, WEEKLY → this week, MONTHLY →
+   *  this month). Computed server-side in target.service.listTargets. */
+  achieved: number;
   effectiveFrom: string;
   effectiveTo: string | null;
   isActive: boolean;
+  /** Derived status that respects effectiveFrom / effectiveTo. */
+  effectiveStatus?: "ACTIVE" | "SCHEDULED" | "EXPIRED" | "INACTIVE";
+  /** Negative = days past, null = ongoing. */
+  daysUntilEnd?: number | null;
+  daysUntilStart?: number | null;
   createdAt: string;
 }
 
 function TargetsTab({ userId }: { userId: string }) {
-  const { data, loading, error, reload } = usePaginatedList<TargetRow>(`/targets?recruiterId=${userId}`);
+  // Poll every 30s so the Completed column reflects new submissions in
+  // near real time without the admin having to reload the page.
+  const { data, loading, error, reload } = usePaginatedList<TargetRow>(
+    `/targets?recruiterId=${userId}`,
+    { refetchInterval: 30_000 },
+  );
   const cols: Column<TargetRow>[] = [
-    { key: "targetType", header: "Type", cell: (r) => <Badge variant="default">{r.targetType}</Badge> },
-    { key: "targetValue", header: "Value", cell: (r) => r.targetValue },
-    { key: "effectiveFrom", header: "From", cell: (r) => fmtDate(r.effectiveFrom) },
-    { key: "effectiveTo", header: "To", cell: (r) => fmtDate(r.effectiveTo) },
     {
-      key: "isActive",
+      key: "targetType",
+      header: "Type",
+      cell: (r) => <Badge variant="default">{r.targetType}</Badge>,
+    },
+    { key: "targetValue", header: "Value", cell: (r) => r.targetValue },
+    {
+      key: "achieved",
+      header: "Completed",
+      cell: (r) => {
+        const pct = r.targetValue > 0 ? Math.min(100, (r.achieved / r.targetValue) * 100) : 0;
+        const hit = r.achieved >= r.targetValue && r.targetValue > 0;
+        const colorClass = hit
+          ? "text-success-500"
+          : pct >= 50
+            ? "text-warning-500"
+            : "text-text-secondary";
+        return (
+          <div className="flex items-center gap-2">
+            <span className={`text-sm font-medium ${colorClass}`}>
+              {r.achieved} / {r.targetValue}
+            </span>
+            <div className="bg-bg-muted h-1.5 w-16 overflow-hidden rounded-full">
+              <div
+                className={
+                  hit
+                    ? "bg-success-500 h-full"
+                    : pct >= 50
+                      ? "bg-warning-500 h-full"
+                      : "bg-primary-500 h-full"
+                }
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+            {hit && (
+              <Badge variant="success" size="sm">
+                ✓
+              </Badge>
+            )}
+          </div>
+        );
+      },
+    },
+    { key: "effectiveFrom", header: "From", cell: (r) => fmtDate(r.effectiveFrom) },
+    {
+      key: "effectiveTo",
+      header: "To",
+      cell: (r) => {
+        const dateText = fmtDate(r.effectiveTo);
+        const days = r.daysUntilEnd;
+        const status = r.effectiveStatus;
+        let sub: { text: string; cls: string } | null = null;
+        if (status === "ACTIVE" && days != null) {
+          if (days <= 0) sub = { text: "ends today", cls: "text-warning-500" };
+          else if (days <= 7) sub = { text: `ends in ${days}d`, cls: "text-warning-500" };
+        } else if (status === "EXPIRED" && days != null) {
+          sub = { text: `expired ${Math.abs(days)}d ago`, cls: "text-error-500" };
+        } else if (status === "SCHEDULED" && r.daysUntilStart != null) {
+          sub = { text: `starts in ${r.daysUntilStart}d`, cls: "text-text-muted" };
+        }
+        return (
+          <div>
+            <div>{dateText}</div>
+            {sub && <p className={`text-xs ${sub.cls}`}>{sub.text}</p>}
+          </div>
+        );
+      },
+    },
+    {
+      key: "effectiveStatus",
       header: "Status",
-      cell: (r) => (
-        <Badge variant={r.isActive ? "success" : "default"}>
-          {r.isActive ? "Active" : "Inactive"}
-        </Badge>
-      ),
+      cell: (r) => {
+        const status =
+          r.effectiveStatus ??
+          (!r.isActive
+            ? "INACTIVE"
+            : new Date(r.effectiveFrom) > new Date()
+              ? "SCHEDULED"
+              : r.effectiveTo && new Date(r.effectiveTo) < new Date()
+                ? "EXPIRED"
+                : "ACTIVE");
+        const variant =
+          status === "ACTIVE"
+            ? "success"
+            : status === "SCHEDULED"
+              ? "info"
+              : status === "EXPIRED"
+                ? "warning"
+                : "default";
+        const label =
+          status === "ACTIVE"
+            ? "Active"
+            : status === "SCHEDULED"
+              ? "Scheduled"
+              : status === "EXPIRED"
+                ? "Expired"
+                : "Inactive";
+        return <Badge variant={variant}>{label}</Badge>;
+      },
     },
   ];
   if (loading) return <TableSkeleton />;
@@ -927,6 +1041,168 @@ function ArchiveTab({ userId }: { userId: string }) {
   return <DataTable columns={cols} data={data} emptyTitle="No archive entries" />;
 }
 
+// ── Tasks (§Task) ───────────────────────────────────────────────
+//
+// Lists every task assignment for this user (regardless of status), with
+// derived time bucket + decision note. Polls every 60s so live submissions
+// + decisions reflect without manual reload.
+interface TasksAssignmentRow {
+  id: string;
+  taskId: string;
+  status: "PENDING" | "SUBMITTED" | "ACCEPTED" | "REJECTED";
+  submittedAt: string | null;
+  decisionNote: string | null;
+  decidedAt: string | null;
+  submissionCount: number;
+  timeBucket: "OVERDUE" | "DUE_TODAY" | "DUE_SOON" | "ON_TRACK" | "NOT_STARTED";
+  daysUntilEnd: number;
+  task: {
+    id: string;
+    subject: string;
+    priority: "LOW" | "MEDIUM" | "HIGH" | "URGENT";
+    startDate: string;
+    endDate: string;
+    status: "ACTIVE" | "CANCELLED";
+  };
+}
+
+function TasksTab({ userId }: { userId: string }) {
+  // Admin viewing another employee — use the admin list endpoint scoped
+  // to that user, not /tasks/me which would return the admin's own tasks.
+  const { data, loading, error, reload } = usePaginatedList<{
+    id: string;
+    subject: string;
+    priority: TasksAssignmentRow["task"]["priority"];
+    startDate: string;
+    endDate: string;
+    status: "ACTIVE" | "CANCELLED";
+    daysUntilEnd: number;
+    isOverdue: boolean;
+    assignments: {
+      id: string;
+      userId: string;
+      status: TasksAssignmentRow["status"];
+      submittedAt: string | null;
+      decisionNote: string | null;
+      decidedAt: string | null;
+      submissionCount: number;
+    }[];
+  }>(`/tasks?assigneeId=${userId}&limit=200`, { refetchInterval: 60_000 });
+
+  // Flatten — show one row per (task, this user's assignment)
+  const rows = data
+    .map((t) => {
+      const a = t.assignments.find((x) => x.userId === userId);
+      if (!a) return null;
+      const now = new Date();
+      const end = new Date(t.endDate);
+      const start = new Date(t.startDate);
+      let bucket: TasksAssignmentRow["timeBucket"] = "ON_TRACK";
+      if (a.status === "ACCEPTED") bucket = "ON_TRACK";
+      else if (now < start) bucket = "NOT_STARTED";
+      else if (now > end) bucket = "OVERDUE";
+      else {
+        const ms = end.getTime() - now.getTime();
+        const day = 24 * 60 * 60 * 1000;
+        bucket = ms <= day ? "DUE_TODAY" : ms <= 3 * day ? "DUE_SOON" : "ON_TRACK";
+      }
+      return { task: t, assignment: a, bucket };
+    })
+    .filter((r): r is NonNullable<typeof r> => r !== null);
+
+  const priorityVariant: Record<
+    "LOW" | "MEDIUM" | "HIGH" | "URGENT",
+    "default" | "info" | "warning" | "danger"
+  > = { LOW: "default", MEDIUM: "info", HIGH: "warning", URGENT: "danger" };
+  const statusVariant: Record<
+    "PENDING" | "SUBMITTED" | "ACCEPTED" | "REJECTED",
+    "default" | "info" | "success" | "danger"
+  > = { PENDING: "default", SUBMITTED: "info", ACCEPTED: "success", REJECTED: "danger" };
+
+  const cols: Column<(typeof rows)[number]>[] = [
+    {
+      key: "subject",
+      header: "Task",
+      cell: (r) => (
+        <div className="min-w-0">
+          <p className="text-text-primary font-medium">{r.task.subject}</p>
+          <p className="text-text-muted text-xs">
+            {fmtDate(r.task.startDate)} → {fmtDate(r.task.endDate)}
+          </p>
+        </div>
+      ),
+    },
+    {
+      key: "priority",
+      header: "Priority",
+      cell: (r) => (
+        <Badge variant={priorityVariant[r.task.priority]} size="sm">
+          {r.task.priority}
+        </Badge>
+      ),
+    },
+    {
+      key: "status",
+      header: "Status",
+      cell: (r) => (
+        <Badge variant={statusVariant[r.assignment.status]} size="sm">
+          {r.assignment.status}
+        </Badge>
+      ),
+    },
+    {
+      key: "bucket",
+      header: "Timing",
+      cell: (r) => {
+        if (r.task.status === "CANCELLED") {
+          return <span className="text-text-muted text-xs">Task cancelled</span>;
+        }
+        const isUrgent = r.bucket === "OVERDUE" || r.bucket === "DUE_TODAY";
+        const isWarn = r.bucket === "DUE_SOON";
+        const cls = isUrgent
+          ? "text-error-500"
+          : isWarn
+            ? "text-warning-500"
+            : "text-text-muted";
+        const labelMap = {
+          OVERDUE: `Overdue by ${Math.abs(r.task.daysUntilEnd)}d`,
+          DUE_TODAY: "Due today",
+          DUE_SOON: `Due in ${r.task.daysUntilEnd}d`,
+          ON_TRACK: `${r.task.daysUntilEnd}d left`,
+          NOT_STARTED: "Not started",
+        } as const;
+        return <span className={`text-xs ${cls}`}>{labelMap[r.bucket]}</span>;
+      },
+    },
+    {
+      key: "attempts",
+      header: "Attempts",
+      cell: (r) =>
+        r.assignment.submissionCount > 0 ? (
+          <span className="text-text-secondary text-xs">{r.assignment.submissionCount}</span>
+        ) : (
+          <span className="text-text-muted text-xs">—</span>
+        ),
+    },
+    {
+      key: "decision",
+      header: "Decision Note",
+      cell: (r) =>
+        r.assignment.decisionNote ? (
+          <span className="text-text-secondary line-clamp-2 max-w-xs text-xs">
+            {r.assignment.decisionNote}
+          </span>
+        ) : (
+          <span className="text-text-muted text-xs">—</span>
+        ),
+    },
+  ];
+
+  if (loading) return <TableSkeleton />;
+  if (error) return <TabError message={error} onRetry={reload} />;
+  return <DataTable columns={cols} data={rows} emptyTitle="No tasks assigned" />;
+}
+
 // ══════════════════════════════════════════════
 //  Entry-point component — routes to the right tab
 // ══════════════════════════════════════════════
@@ -944,6 +1220,8 @@ export function GodviewTab({ tab, userId }: { tab: GodviewTabId; userId: string 
       return <SecurityTab userId={userId} />;
     case "targets":
       return <TargetsTab userId={userId} />;
+    case "tasks":
+      return <TasksTab userId={userId} />;
     case "offer-letters":
       return <OfferLettersTab userId={userId} />;
     case "history":

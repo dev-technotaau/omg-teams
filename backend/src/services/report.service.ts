@@ -1,8 +1,13 @@
-import { type ReportType, type ReportSource, type Prisma } from "@prisma/client";
+import { type ReportType, type ReportSource, Prisma } from "@prisma/client";
 import ExcelJS from "exceljs";
 import { getPrisma } from "../config/database.js";
 import { env } from "../config/env.js";
 import { logger } from "../instrument.js";
+import {
+  sanitizeColumnKeys,
+  resolveColumnDefs,
+  getDefaultColumnKeys,
+} from "./report-columns.js";
 
 // ──────────────────────────────────────────────
 //  Report Generation Service — Spec Section 10, 20
@@ -24,11 +29,18 @@ export interface ReportFilters {
 
 /**
  * Generate an XLSX report and return the buffer.
+ *
+ * `columnKeys` (optional) — caller-supplied ordered subset of the
+ * report type's column pool. Unknown/dupe keys are dropped; an
+ * empty result falls back to the type's default set. Used by
+ * Generate, Schedule, and the worker so a single code path
+ * produces every report on the platform.
  */
 export async function generateReport(
   reportType: ReportType,
   filters: ReportFilters,
-): Promise<{ buffer: Buffer; fileName: string }> {
+  columnKeys?: string[] | null,
+): Promise<{ buffer: Buffer; fileName: string; columnKeys: string[] }> {
   const data = await fetchTypedReportData(reportType, filters);
 
   const workbook = new ExcelJS.Workbook();
@@ -37,8 +49,10 @@ export async function generateReport(
 
   const sheet = workbook.addWorksheet("Report");
 
-  // Define columns based on report type
-  const columns = getColumnsForReportType(reportType);
+  const resolvedKeys = columnKeys && columnKeys.length > 0
+    ? sanitizeColumnKeys(reportType, columnKeys)
+    : getDefaultColumnKeys(reportType);
+  const columns = resolveColumnDefs(reportType, resolvedKeys);
   sheet.columns = columns.map((col) => ({ header: col.header, key: col.key, width: col.width }));
 
   // Style header row
@@ -55,9 +69,14 @@ export async function generateReport(
   const datePart = new Date().toISOString().slice(0, 10);
   const fileName = `${reportType}_${datePart}.xlsx`;
 
-  logger.info("Report generated", { reportType, rows: data.rows.length, fileName });
+  logger.info("Report generated", {
+    reportType,
+    rows: data.rows.length,
+    columns: resolvedKeys.length,
+    fileName,
+  });
 
-  return { buffer, fileName };
+  return { buffer, fileName, columnKeys: resolvedKeys };
 }
 
 /**
@@ -68,7 +87,11 @@ export async function generateReport(
 export async function uploadReportToCloud(
   buffer: Buffer,
   fileName: string,
-): Promise<{ cloudUrl: string | null; cloudStorageKey: string | null }> {
+): Promise<{
+  cloudUrl: string | null;
+  cloudStorageKey: string | null;
+  storageBackend: "R2" | null;
+}> {
   if (env.hasR2) {
     const { PutObjectCommand } = await import("@aws-sdk/client-s3");
     const { getR2 } = await import("../config/storage.js");
@@ -85,11 +108,11 @@ export async function uploadReportToCloud(
     const { getSignedR2Url } = await import("../utils/signed-url.js");
     const cloudUrl = await getSignedR2Url(key, undefined, `attachment; filename="${fileName}"`);
     logger.info("Report uploaded to R2", { key, size: buffer.length });
-    return { cloudUrl, cloudStorageKey: key };
+    return { cloudUrl, cloudStorageKey: key, storageBackend: "R2" };
   }
 
   logger.warn("No cloud storage configured for reports — stored in DB only", { fileName });
-  return { cloudUrl: null, cloudStorageKey: null };
+  return { cloudUrl: null, cloudStorageKey: null, storageBackend: null };
 }
 
 /**
@@ -100,9 +123,11 @@ export async function saveReportRecord(data: {
   reportName: string;
   source: ReportSource;
   filters?: Record<string, unknown>;
+  columnKeys?: string[];
   fileSize?: number;
   cloudUrl?: string | null;
   cloudStorageKey?: string | null;
+  storageBackend?: "CLOUDINARY" | "R2" | null;
   createdByUserId?: string;
 }) {
   const prisma = getPrisma();
@@ -111,19 +136,24 @@ export async function saveReportRecord(data: {
   const expiresAt = new Date();
   expiresAt.setDate(expiresAt.getDate() + 30);
 
-  return prisma.generatedReport.create({
-    data: {
-      reportType: data.reportType,
-      reportName: data.reportName,
-      source: data.source,
-      filters: (data.filters as Prisma.InputJsonValue) ?? undefined,
-      fileSize: data.fileSize ?? null,
-      cloudUrl: data.cloudUrl ?? null,
-      cloudStorageKey: data.cloudStorageKey ?? null,
-      expiresAt,
-      createdByUserId: data.createdByUserId ?? null,
-    },
-  });
+  const createData: Prisma.GeneratedReportUncheckedCreateInput = {
+    reportType: data.reportType,
+    reportName: data.reportName,
+    source: data.source,
+    fileSize: data.fileSize ?? null,
+    cloudUrl: data.cloudUrl ?? null,
+    cloudStorageKey: data.cloudStorageKey ?? null,
+    storageBackend: data.storageBackend ?? null,
+    expiresAt,
+    createdByUserId: data.createdByUserId ?? null,
+  };
+  if (data.filters !== undefined) {
+    createData.filters = data.filters as Prisma.InputJsonValue;
+  }
+  if (data.columnKeys !== undefined) {
+    createData.columnConfig = data.columnKeys as unknown as Prisma.InputJsonValue;
+  }
+  return prisma.generatedReport.create({ data: createData });
 }
 
 /**
@@ -199,7 +229,7 @@ export async function listGeneratedReports(opts: HistoryQueryOpts) {
   // §20.4 — Enrich with recipient emails, sentAt, expiration indicator
   // Generate fresh signed URLs for non-expired reports
   const now = new Date();
-  const { getSignedR2Url } = await import("../utils/signed-url.js");
+  const { getSignedDownloadUrl } = await import("../utils/signed-url.js");
 
   const enriched = await Promise.all(
     data.map(async (r) => {
@@ -212,15 +242,16 @@ export async function listGeneratedReports(opts: HistoryQueryOpts) {
       const isExpired =
         r.isExpired || (r.expiresAt !== null && r.expiresAt !== undefined && r.expiresAt < now);
 
-      // Regenerate signed URL from storageKey for non-expired reports
+      // Regenerate signed URL using the recorded backend (falls back to the
+      // configured-default heuristic for rows written before the column existed).
       let cloudUrl: string | null = null;
-      if (!isExpired && r.cloudStorageKey && env.hasR2) {
+      if (!isExpired && r.cloudStorageKey) {
         try {
-          cloudUrl = await getSignedR2Url(
-            r.cloudStorageKey,
-            undefined,
-            `attachment; filename="${r.reportName}"`,
-          );
+          cloudUrl = await getSignedDownloadUrl(r.cloudStorageKey, {
+            backend: r.storageBackend,
+            contentDisposition: `attachment; filename="${r.reportName}"`,
+            resourceType: "raw",
+          });
         } catch {
           cloudUrl = null;
         }
@@ -261,6 +292,7 @@ export async function listSchedules(status?: string) {
     include: {
       recipients: { where: { removedAt: null } },
       deliveryLogs: { orderBy: { sentAt: "desc" }, take: 1 },
+      template: { select: { id: true, name: true } },
     },
     orderBy: { createdAt: "desc" },
   });
@@ -274,6 +306,9 @@ export async function listSchedules(status?: string) {
         reportType: s.reportType,
         reportName: s.reportName,
         filters: s.filters as Record<string, string> | null,
+        columnConfig: (s.columnConfig as string[] | null) ?? null,
+        templateId: s.templateId,
+        templateName: s.template?.name ?? null,
         frequency: s.frequency,
         time: timing
           ? `${String(timing.hour ?? 0).padStart(2, "0")}:${String(timing.minute ?? 0).padStart(2, "0")}`
@@ -326,6 +361,8 @@ export async function createSchedule(data: {
   time: string;
   recipients: string[];
   filters?: Record<string, string>;
+  columnKeys?: string[] | null;
+  templateId?: string | null;
 }) {
   const prisma = getPrisma();
 
@@ -338,18 +375,31 @@ export async function createSchedule(data: {
   }
   const [hour, minute] = timeStr.split(":").map(Number);
 
-  return prisma.scheduledReportConfig.create({
-    data: {
-      reportType: data.reportType as ReportType,
-      reportName: data.reportName,
-      filters: (data.filters as Prisma.InputJsonValue) ?? {},
-      frequency: data.frequency as "DAILY" | "MONTHLY" | "YEARLY",
-      timing: { hour: hour ?? 0, minute: minute ?? 0 },
-      isActive: true,
-      recipients: {
-        create: data.recipients.map((email) => ({ email })),
-      },
+  const reportType = data.reportType as ReportType;
+  const cleanedKeys = data.columnKeys
+    ? sanitizeColumnKeys(reportType, data.columnKeys)
+    : null;
+
+  const createData: Prisma.ScheduledReportConfigCreateInput = {
+    reportType,
+    reportName: data.reportName,
+    filters: (data.filters as Prisma.InputJsonValue) ?? {},
+    frequency: data.frequency as "DAILY" | "MONTHLY" | "YEARLY",
+    timing: { hour: hour ?? 0, minute: minute ?? 0 },
+    isActive: true,
+    recipients: {
+      create: data.recipients.map((email) => ({ email })),
     },
+  };
+  if (cleanedKeys) {
+    createData.columnConfig = cleanedKeys as unknown as Prisma.InputJsonValue;
+  }
+  if (data.templateId) {
+    createData.template = { connect: { id: data.templateId } };
+  }
+
+  return prisma.scheduledReportConfig.create({
+    data: createData,
     include: { recipients: true },
   });
 }
@@ -367,6 +417,8 @@ export async function updateSchedule(
     time?: string | undefined;
     recipients?: string[] | undefined;
     filters?: Record<string, string> | undefined;
+    columnKeys?: string[] | null | undefined;
+    templateId?: string | null | undefined;
   },
 ) {
   const prisma = getPrisma();
@@ -381,6 +433,26 @@ export async function updateSchedule(
   }
   if (data.filters !== undefined) {
     updateData.filters = data.filters as Prisma.InputJsonValue;
+  }
+  if (data.columnKeys !== undefined) {
+    // Need the report type to validate against — fall back to existing row's type if not in payload
+    const targetType = (data.reportType as ReportType | undefined) ?? (
+      await prisma.scheduledReportConfig.findUnique({
+        where: { id },
+        select: { reportType: true },
+      })
+    )?.reportType;
+    if (data.columnKeys === null) {
+      updateData.columnConfig = Prisma.DbNull;
+    } else if (targetType) {
+      const cleaned = sanitizeColumnKeys(targetType, data.columnKeys);
+      updateData.columnConfig = cleaned as unknown as Prisma.InputJsonValue;
+    }
+  }
+  if (data.templateId !== undefined) {
+    updateData.template = data.templateId
+      ? { connect: { id: data.templateId } }
+      : { disconnect: true };
   }
 
   const result = await prisma.scheduledReportConfig.update({ where: { id }, data: updateData });
@@ -450,147 +522,10 @@ export async function cleanupExpiredReports(): Promise<number> {
 }
 
 // ──────────────────────────────────────────────
-//  Per-type column definitions
-// ──────────────────────────────────────────────
-
-interface ReportColumn {
-  header: string;
-  key: string;
-  width: number;
-}
-
-const CANDIDATE_BASE_COLS: ReportColumn[] = [
-  { header: "Sr No", key: "serialNo", width: 8 },
-  { header: "Candidate Name", key: "candidateName", width: 20 },
-  { header: "Contact No", key: "contactNo", width: 15 },
-  { header: "Email", key: "emailId", width: 25 },
-  { header: "Zone", key: "zone", width: 10 },
-  { header: "State", key: "state", width: 15 },
-  { header: "Location", key: "location", width: 15 },
-  { header: "Profile", key: "profile", width: 15 },
-  { header: "Experience", key: "experience", width: 10 },
-  { header: "Current CTC", key: "currentCtc", width: 12 },
-  { header: "Expected CTC", key: "expectedCtc", width: 12 },
-  { header: "Status", key: "status", width: 10 },
-  { header: "Stage", key: "stage", width: 15 },
-  { header: "Recruiter", key: "recruiterName", width: 20 },
-  { header: "Company", key: "company", width: 20 },
-  { header: "Date", key: "createdAt", width: 12 },
-];
-
-const ATTENDANCE_COLS: ReportColumn[] = [
-  { header: "Date", key: "date", width: 12 },
-  { header: "Employee", key: "employee", width: 20 },
-  { header: "Employee ID", key: "employeeId", width: 15 },
-  { header: "Email", key: "email", width: 25 },
-  { header: "Punch In", key: "punchIn", width: 15 },
-  { header: "Punch Out", key: "punchOut", width: 15 },
-  { header: "Working Hours", key: "workingHours", width: 12 },
-  { header: "Status", key: "status", width: 15 },
-  { header: "Late", key: "isLate", width: 8 },
-  { header: "Late By (min)", key: "lateByMinutes", width: 12 },
-];
-
-const LEAVE_COLS: ReportColumn[] = [
-  { header: "Employee", key: "employee", width: 20 },
-  { header: "Employee ID", key: "employeeId", width: 15 },
-  { header: "Leave Type", key: "leaveType", width: 15 },
-  { header: "Start Date", key: "startDate", width: 12 },
-  { header: "End Date", key: "endDate", width: 12 },
-  { header: "Days", key: "numberOfDays", width: 8 },
-  { header: "Half Day", key: "isHalfDay", width: 10 },
-  { header: "Reason", key: "reason", width: 30 },
-  { header: "Status", key: "status", width: 12 },
-  { header: "Actioned By", key: "actionedBy", width: 20 },
-];
-
-const PAYMENT_COLS: ReportColumn[] = [
-  { header: "Sr No", key: "serialNo", width: 8 },
-  { header: "Candidate Name", key: "candidateName", width: 20 },
-  { header: "Company", key: "company", width: 20 },
-  { header: "Invoice No", key: "invoiceNumber", width: 15 },
-  { header: "Invoice Date", key: "invoiceDate", width: 12 },
-  { header: "Invoice Amount", key: "invoiceAmount", width: 15 },
-  { header: "GST", key: "gstAmount", width: 12 },
-  { header: "TDS", key: "tdsAmount", width: 12 },
-  { header: "Amount Received", key: "amountReceived", width: 15 },
-  { header: "Payment Status", key: "paymentStatus", width: 15 },
-  { header: "Payment Date", key: "paymentDate", width: 12 },
-];
-
-const EMPLOYEE_PERF_COLS: ReportColumn[] = [
-  { header: "Employee", key: "employee", width: 20 },
-  { header: "Employee ID", key: "employeeId", width: 15 },
-  { header: "Role", key: "role", width: 15 },
-  { header: "Candidates Today", key: "candidatesToday", width: 15 },
-  { header: "Candidates This Month", key: "candidatesMonth", width: 18 },
-  { header: "Total Candidates", key: "totalCandidates", width: 15 },
-  { header: "Completion Rate %", key: "completionRate", width: 15 },
-  { header: "Attendance Rate %", key: "attendanceRate", width: 15 },
-  { header: "Status", key: "status", width: 12 },
-];
-
-function getColumnsForReportType(type: ReportType): ReportColumn[] {
-  switch (type) {
-    case "ATTENDANCE":
-      return ATTENDANCE_COLS;
-    case "LEAVE":
-      return LEAVE_COLS;
-    case "PAYMENT_INVOICE":
-      return PAYMENT_COLS;
-    case "EMPLOYEE_PERFORMANCE_ALL":
-    case "EMPLOYEE_PERFORMANCE_RECRUITERS":
-    case "EMPLOYEE_PERFORMANCE_RMS":
-    case "EMPLOYEE_PERFORMANCE_INDIVIDUAL":
-      return EMPLOYEE_PERF_COLS;
-    case "HR_FEEDBACK":
-      return [
-        ...CANDIDATE_BASE_COLS,
-        { header: "HR Manager", key: "hrManager", width: 20 },
-        { header: "HR Feedback", key: "hrFeedback", width: 15 },
-        { header: "CV Shared On", key: "cvSharedOnDate", width: 12 },
-      ];
-    case "WORK_PROFILE":
-      return [
-        ...CANDIDATE_BASE_COLS,
-        { header: "Designation", key: "currentDesignation", width: 18 },
-        { header: "Organization", key: "currentOrganization", width: 20 },
-        { header: "Qualification", key: "higherQualification", width: 18 },
-        { header: "Notice Period", key: "noticePeriod", width: 12 },
-      ];
-    case "COMPANY_SPECIFIC":
-      return [
-        ...CANDIDATE_BASE_COLS,
-        { header: "Service Provider", key: "serviceProvider", width: 20 },
-        { header: "DOJ", key: "dateOfJoining", width: 12 },
-      ];
-    case "SERVICE_PROVIDER_SPECIFIC":
-      return [
-        ...CANDIDATE_BASE_COLS,
-        { header: "Service Provider", key: "serviceProvider", width: 20 },
-        { header: "HR Manager", key: "hrManager", width: 20 },
-      ];
-    case "HR_SPECIFIC":
-      return [
-        ...CANDIDATE_BASE_COLS,
-        { header: "HR Manager", key: "hrManager", width: 20 },
-        { header: "HR Feedback", key: "hrFeedback", width: 15 },
-      ];
-    case "ZONE_WISE":
-    case "STATUS_BASED":
-    case "CANDIDATE":
-    case "RECRUITMENT":
-    case "CANDIDATE_MIS":
-    case "DAILY_RECRUITMENT_BATCH":
-    case "DAILY_RECRUITMENT_INDIVIDUAL":
-    case "CUSTOM":
-    default:
-      return CANDIDATE_BASE_COLS;
-  }
-}
-
-// ──────────────────────────────────────────────
 //  Typed report data fetcher (used by generateReport)
+//  Column layout comes from report-columns.ts; this
+//  fetcher only needs to populate the superset of fields
+//  the registry exposes for the report type's source.
 // ──────────────────────────────────────────────
 
 interface TypedReportData {
@@ -825,36 +760,74 @@ async function fetchTypedReportData(
     take: 10000,
   });
 
+  const fmtDate = (d: Date | null | undefined) =>
+    d ? d.toISOString().slice(0, 10) : "";
+  const fmtBool = (b: boolean | null | undefined) =>
+    b === null || b === undefined ? "" : b ? "Yes" : "No";
+
   return {
     rows: candidates.map((c) => ({
+      // Identity & meta
       serialNo: c.globalSerialNumber,
       candidateName: c.candidateName,
       contactNo: c.contactNo,
       emailId: c.emailId,
+      dateOfBirth: fmtDate(c.dateOfBirth),
+      // Location
       zone: c.zone,
       state: c.state,
       location: c.location,
+      adminState: c.adminState,
+      adminLocation: c.adminLocation,
+      // Profile
       profile: c.profile,
       experience: c.yearsOfExperience,
-      currentCtc: c.currentCtc,
-      expectedCtc: c.expectedCtc,
-      status: c.status,
-      stage: c.candidateStage,
-      recruiterName: `${c.recruiter.firstName} ${c.recruiter.lastName}`,
-      company: c.company?.name ?? "",
-      serviceProvider: c.serviceProvider?.name ?? "",
-      hrManager: c.hrManager?.name ?? "",
-      dateOfJoining: c.dateOfJoining?.toISOString().slice(0, 10) ?? "",
-      invoiceNumber: c.invoiceNumber,
-      invoiceAmount: c.invoiceAmountTotal,
-      paymentStatus: c.paymentStatus,
-      createdAt: c.createdAt.toISOString().slice(0, 10),
       currentDesignation: c.currentDesignation,
       currentOrganization: c.currentOrganization,
       higherQualification: c.higherQualification,
       noticePeriod: c.noticePeriod,
+      // Education
+      diplomaPartFull: c.diplomaPartFull,
+      graduationPercent: c.graduationPercent,
+      graduationYear: c.graduationYear,
+      twelfthPercent: c.twelfthPercent,
+      twelfthPassingYear: c.twelfthPassingYear,
+      tenthPercent: c.tenthPercent,
+      tenthPassingYear: c.tenthPassingYear,
+      // Compensation
+      currentCtc: c.currentCtc,
+      expectedCtc: c.expectedCtc,
+      // Pipeline
+      status: c.status,
+      stage: c.candidateStage,
+      isDuplicate: fmtBool(c.isDuplicate),
+      dateSourced: fmtDate(c.dateSourced),
+      cvSharedOnDate: fmtDate(c.cvSharedOnDate),
+      dateOfJoining: fmtDate(c.dateOfJoining),
+      remarks: c.remarks,
+      // Set-A checkpoints
+      isCtcInformed: fmtBool(c.isCtcInformed),
+      isOffRollOkay: fmtBool(c.isOffRollOkay),
+      isOnRollExplained: fmtBool(c.isOnRollExplained),
+      hasTwoWheeler: fmtBool(c.hasTwoWheeler),
+      communicationSkill: c.communicationSkill,
+      // Stakeholders
+      recruiterName: `${c.recruiter.firstName} ${c.recruiter.lastName}`,
+      company: c.company?.name ?? "",
+      serviceProvider: c.serviceProvider?.name ?? "",
+      hrManager: c.hrManager?.name ?? "",
       hrFeedback: c.hrFeedback,
-      cvSharedOnDate: c.cvSharedOnDate?.toISOString().slice(0, 10) ?? "",
+      // Billing
+      invoiceNumber: c.invoiceNumber,
+      invoiceDate: fmtDate(c.invoiceDate),
+      invoiceAmount: c.invoiceAmountTotal,
+      gstAmount: c.gstAmount,
+      tdsAmount: c.tdsAmount,
+      amountReceived: c.amountReceived,
+      paymentStatus: c.paymentStatus,
+      paymentDate: fmtDate(c.paymentDate),
+      // Audit
+      createdAt: fmtDate(c.createdAt),
     })),
   };
 }

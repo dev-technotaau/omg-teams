@@ -11,6 +11,10 @@ import { api } from "@/lib/api";
 export interface UploadResult {
   url: string;
   storageKey: string;
+  /** Which backend the file landed in. The frontend forwards this through to
+   *  follow-up endpoints (e.g. /documents/upload) so the DB row records the
+   *  explicit backend — no guesswork in getSignedDownloadUrl later. */
+  storageBackend?: "CLOUDINARY" | "R2";
   originalName?: string;
   size?: number;
   mimeType?: string;
@@ -25,9 +29,10 @@ function buildFormData(file: File, fieldName: string): FormData {
 
 async function uploadFile(endpoint: string, file: File, fieldName: string): Promise<UploadResult> {
   const form = buildFormData(file, fieldName);
-  const res = await api.post<UploadResult>(endpoint, form, {
-    headers: { "Content-Type": "multipart/form-data" },
-  });
+  // Do not set Content-Type — axios + the browser auto-generate
+  // `multipart/form-data; boundary=...` from the FormData. Setting it manually
+  // here strips the boundary and breaks multer parsing on the backend.
+  const res = await api.post<UploadResult>(endpoint, form);
   return res.data;
 }
 

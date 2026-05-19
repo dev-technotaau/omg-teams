@@ -3,6 +3,7 @@
 import { useState, useCallback } from "react";
 import Cropper, { type Area } from "react-easy-crop";
 import { RotateCw, FlipHorizontal, FlipVertical, RotateCcw } from "lucide-react";
+import { toast } from "sonner";
 import { Modal, Button } from "@/components/ui";
 
 // ──────────────────────────────────────────────
@@ -47,8 +48,8 @@ export function ProfilePhotoCrop({
       const blob = await getCroppedImg(imageUrl, croppedAreaPixels, rotation, flipH, flipV);
       onCropComplete(blob);
       onClose();
-    } catch {
-      // Crop failed silently
+    } catch (err) {
+      toast.error(err instanceof Error ? `Crop failed: ${err.message}` : "Crop failed");
     } finally {
       setIsSaving(false);
     }
@@ -62,16 +63,17 @@ export function ProfilePhotoCrop({
       size="md"
       footer={
         <>
-          <Button variant="outline" onClick={onClose}>
+          <Button variant="outline" onClick={onClose} className="whitespace-nowrap">
             Cancel
           </Button>
           {onChangeImage && (
-            <Button variant="ghost" onClick={onChangeImage}>
+            <Button variant="ghost" onClick={onChangeImage} className="whitespace-nowrap">
               Choose Different Image
             </Button>
           )}
           <Button
             variant="ghost"
+            className="whitespace-nowrap"
             onClick={() => {
               setCrop({ x: 0, y: 0 });
               setZoom(1);
@@ -82,7 +84,7 @@ export function ProfilePhotoCrop({
           >
             <RotateCcw size={14} className="mr-1" /> Reset
           </Button>
-          <Button loading={isSaving} onClick={() => void handleSave()}>
+          <Button loading={isSaving} onClick={() => void handleSave()} className="whitespace-nowrap">
             Save Photo
           </Button>
         </>

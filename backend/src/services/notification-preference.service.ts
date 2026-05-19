@@ -16,6 +16,7 @@ const ALL_CATEGORIES: NotificationCategory[] = [
   "SYSTEM",
   "REPORT",
   "TARGET",
+  "TASK",
   "GENERAL",
 ];
 
@@ -187,4 +188,46 @@ export async function shouldSendEmail(
   // Must have both global category enabled AND email specifically enabled
   if (!pref) return true;
   return pref.isEnabled && pref.emailEnabled;
+}
+
+// ──────────────────────────────────────────────
+//  §11.5 — Quiet Hours
+//
+//  Stored on the User row (quietHoursStart / quietHoursEnd, both HH:mm
+//  24-hour or null=disabled). The runtime check that gates Socket.IO +
+//  FCM lives in notification.service.isInQuietHours — this module just
+//  reads / writes the persisted values.
+// ──────────────────────────────────────────────
+
+export async function getQuietHours(
+  userId: string,
+): Promise<{ quietHoursStart: string | null; quietHoursEnd: string | null }> {
+  const prisma = getPrisma();
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { quietHoursStart: true, quietHoursEnd: true },
+  });
+  return {
+    quietHoursStart: user?.quietHoursStart ?? null,
+    quietHoursEnd: user?.quietHoursEnd ?? null,
+  };
+}
+
+export async function updateQuietHours(
+  userId: string,
+  data: { quietHoursStart: string | null; quietHoursEnd: string | null },
+): Promise<{ quietHoursStart: string | null; quietHoursEnd: string | null }> {
+  const prisma = getPrisma();
+  const user = await prisma.user.update({
+    where: { id: userId },
+    data: {
+      quietHoursStart: data.quietHoursStart,
+      quietHoursEnd: data.quietHoursEnd,
+    },
+    select: { quietHoursStart: true, quietHoursEnd: true },
+  });
+  return {
+    quietHoursStart: user.quietHoursStart,
+    quietHoursEnd: user.quietHoursEnd,
+  };
 }

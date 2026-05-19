@@ -732,3 +732,186 @@ export async function onMaintenanceMode(startTime: string) {
     }
   }
 }
+
+// ──────────────────────────────────────────────
+//  TASK NOTIFICATIONS (§Task)
+// ──────────────────────────────────────────────
+
+interface TaskNotifyContext {
+  taskId: string;
+  subject: string;
+  priority: string;
+  endDate: Date;
+}
+
+/** New task assigned → notify each assignee */
+export async function onTaskAssigned(assigneeIds: string[], ctx: TaskNotifyContext) {
+  for (const userId of assigneeIds) {
+    try {
+      await createNotification({
+        userId,
+        type: "TASK",
+        title: "New task assigned",
+        message: `${ctx.subject} (${ctx.priority}) — due ${ctx.endDate.toLocaleDateString("en-IN")}`,
+        actionUrl: `/my-tasks?taskId=${ctx.taskId}`,
+        metadata: { taskId: ctx.taskId, priority: ctx.priority },
+      });
+    } catch (err) {
+      logger.error("Failed to fire onTaskAssigned", { userId, taskId: ctx.taskId, error: err });
+    }
+  }
+}
+
+/** Employee submitted a task → notify admins for review */
+export async function onTaskSubmitted(
+  assignmentId: string,
+  taskId: string,
+  taskSubject: string,
+  employeeId: string,
+) {
+  const employeeName = await getUserName(employeeId);
+  await notifyAdmins({
+    type: "TASK",
+    title: "Task submitted for review",
+    message: `${employeeName} submitted "${taskSubject}". Review and accept or reject.`,
+    actionUrl: `/admin/tasks?reviewId=${assignmentId}`,
+    metadata: { taskId, assignmentId, employeeId },
+  });
+}
+
+/** Admin accepted a submission → notify the employee */
+export async function onTaskAccepted(userId: string, taskSubject: string, taskId: string) {
+  try {
+    await createNotification({
+      userId,
+      type: "TASK",
+      title: "Task accepted",
+      message: `Your submission for "${taskSubject}" was accepted. ✅`,
+      actionUrl: `/my-tasks?taskId=${taskId}`,
+      metadata: { taskId },
+    });
+  } catch (err) {
+    logger.error("Failed to fire onTaskAccepted", { userId, taskId, error: err });
+  }
+}
+
+/** Admin rejected a submission → notify the employee */
+export async function onTaskRejected(
+  userId: string,
+  taskSubject: string,
+  taskId: string,
+  reason: string,
+) {
+  try {
+    await createNotification({
+      userId,
+      type: "TASK",
+      title: "Task needs revision",
+      message: `Your submission for "${taskSubject}" was rejected. Reason: ${reason}`,
+      actionUrl: `/my-tasks?taskId=${taskId}`,
+      metadata: { taskId, reason },
+    });
+  } catch (err) {
+    logger.error("Failed to fire onTaskRejected", { userId, taskId, error: err });
+  }
+}
+
+/** Admin cancelled a task → notify all assignees who haven't been accepted */
+export async function onTaskCancelled(
+  assigneeIds: string[],
+  taskSubject: string,
+  taskId: string,
+  reason: string | null,
+) {
+  for (const userId of assigneeIds) {
+    try {
+      await createNotification({
+        userId,
+        type: "TASK",
+        title: "Task cancelled",
+        message: reason
+          ? `"${taskSubject}" was cancelled. Reason: ${reason}`
+          : `"${taskSubject}" was cancelled.`,
+        actionUrl: `/my-tasks?taskId=${taskId}`,
+        metadata: { taskId },
+      });
+    } catch (err) {
+      logger.error("Failed to fire onTaskCancelled", { userId, taskId, error: err });
+    }
+  }
+}
+
+/** Task is overdue → daily scheduler can call this */
+export async function onTaskOverdue(userId: string, taskSubject: string, taskId: string) {
+  try {
+    await createNotification({
+      userId,
+      type: "TASK",
+      title: "Task overdue",
+      message: `"${taskSubject}" is past its deadline. Please complete it as soon as possible.`,
+      actionUrl: `/my-tasks?taskId=${taskId}`,
+      metadata: { taskId },
+    });
+  } catch (err) {
+    logger.error("Failed to fire onTaskOverdue", { userId, taskId, error: err });
+  }
+}
+
+/** Reassignment → notify added and removed assignees */
+export async function onTaskReassigned(
+  addedIds: string[],
+  removedIds: string[],
+  taskSubject: string,
+  taskId: string,
+) {
+  for (const userId of addedIds) {
+    try {
+      await createNotification({
+        userId,
+        type: "TASK",
+        title: "New task assigned",
+        message: `You were added to "${taskSubject}".`,
+        actionUrl: `/my-tasks?taskId=${taskId}`,
+        metadata: { taskId },
+      });
+    } catch (err) {
+      logger.error("Failed to fire onTaskReassigned (added)", { userId, taskId, error: err });
+    }
+  }
+  for (const userId of removedIds) {
+    try {
+      await createNotification({
+        userId,
+        type: "TASK",
+        title: "Removed from task",
+        message: `You were removed from "${taskSubject}".`,
+        metadata: { taskId },
+      });
+    } catch (err) {
+      logger.error("Failed to fire onTaskReassigned (removed)", { userId, taskId, error: err });
+    }
+  }
+}
+
+/** Dates were extended → notify all assignees */
+export async function onTaskExtended(
+  assigneeIds: string[],
+  taskSubject: string,
+  taskId: string,
+  newEndDate: Date,
+) {
+  for (const userId of assigneeIds) {
+    try {
+      await createNotification({
+        userId,
+        type: "TASK",
+        title: "Task deadline extended",
+        message: `"${taskSubject}" — new deadline ${newEndDate.toLocaleDateString("en-IN")}`,
+        actionUrl: `/my-tasks?taskId=${taskId}`,
+        metadata: { taskId },
+      });
+    } catch (err) {
+      logger.error("Failed to fire onTaskExtended", { userId, taskId, error: err });
+    }
+  }
+}

@@ -8,10 +8,11 @@ import {
   ArrowDown,
   ArrowUp,
   CalendarOff,
+  CheckSquare,
   Clock,
   Copy,
   CreditCard,
-  DollarSign,
+  IndianRupee,
   FileText,
   Mail,
   Percent,
@@ -21,6 +22,7 @@ import {
   UserCheck,
   Users,
 } from "lucide-react";
+import { getAdminTaskStats } from "@/services/task.service";
 import { useAuth } from "@/contexts/auth";
 import { getGreeting } from "@/utils/greeting";
 import { api } from "@/lib/api";
@@ -111,8 +113,15 @@ export default function AdminDashboardPage() {
       return r.data;
     },
   });
+  // §Task — task stats (independent so a slow task query doesn't gate the rest)
+  const taskStatsQuery = useQuery({
+    queryKey: qk.tasks.stats(),
+    queryFn: getAdminTaskStats,
+    staleTime: 60_000,
+  });
   const stats = statsQuery.data ?? null;
   const monthlyAttendance = monthlyQuery.data ?? null;
+  const taskStats = taskStatsQuery.data;
   const isLoading = statsQuery.isLoading || monthlyQuery.isLoading;
 
   if (authLoading || isLoading) return <DashboardSkeleton />;
@@ -195,7 +204,7 @@ export default function AdminDashboardPage() {
     {
       label: "Outstanding",
       value: `₹${k.outstandingAmount.toLocaleString("en-IN")}`,
-      icon: <DollarSign size={20} />,
+      icon: <IndianRupee size={20} />,
       color: "text-error-500",
     },
     {
@@ -255,6 +264,21 @@ export default function AdminDashboardPage() {
       href: "/admin/offer-letters",
       icon: <Mail size={16} />,
       color: "text-info-500",
+    },
+    // §Task — submissions awaiting admin review + overdue tasks
+    {
+      label: "Tasks Awaiting Review",
+      count: taskStats?.awaitingReview ?? 0,
+      href: "/admin/tasks?assignmentStatus=SUBMITTED",
+      icon: <CheckSquare size={16} />,
+      color: "text-info-500",
+    },
+    {
+      label: "Overdue Tasks",
+      count: taskStats?.overdue ?? 0,
+      href: "/admin/tasks?timeBucket=OVERDUE",
+      icon: <AlertCircle size={16} />,
+      color: "text-error-500",
     },
   ];
 

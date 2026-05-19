@@ -8,6 +8,7 @@ import { FirebasePresenceProvider } from "@/components/firebase-presence-provide
 import { MainScrollRestore } from "@/components/main-scroll-restore";
 import { ScrollToTop } from "@/components/scroll-to-top";
 import { AuthGate } from "@/components/auth-gate";
+import { BodyScrollLock } from "@/components/body-scroll-lock";
 import type { ReactNode } from "react";
 
 /**
@@ -23,6 +24,7 @@ export default function ProtectedLayout({ children }: { children: ReactNode }) {
     <AuthProvider>
       <AuthGate>
         <NotificationProvider>
+          <BodyScrollLock />
           <OfflineBanner />
           <SessionTimeoutWarning />
           <FirebasePresenceProvider />

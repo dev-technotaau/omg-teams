@@ -188,13 +188,30 @@ export default function MyTargetsPage() {
                       </span>
                     </div>
 
-                    {/* Date window */}
+                    {/* Date window + time-context (matches admin Targets page).
+                        Backend pre-filters to currently-effective rows, so the
+                        only context that applies here is "ends in Nd" — useful
+                        as a heads-up that the target window is closing soon. */}
                     <div className="text-text-muted text-xs">
                       Effective {new Date(t.effectiveFrom).toLocaleDateString("en-IN")}
                       {t.effectiveTo
                         ? ` → ${new Date(t.effectiveTo).toLocaleDateString("en-IN")}`
                         : " → ongoing"}
                     </div>
+                    {t.daysUntilEnd != null &&
+                      t.daysUntilEnd >= 0 &&
+                      t.daysUntilEnd <= 7 && (
+                        <p
+                          className={cn(
+                            "text-xs font-medium",
+                            t.daysUntilEnd === 0 ? "text-error-500" : "text-warning-500",
+                          )}
+                        >
+                          {t.daysUntilEnd === 0
+                            ? "Ends today"
+                            : `Ends in ${t.daysUntilEnd} day${t.daysUntilEnd === 1 ? "" : "s"}`}
+                        </p>
+                      )}
                   </div>
                 </Card>
               );

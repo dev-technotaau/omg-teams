@@ -1,4 +1,4 @@
-import { type DocumentStatus, type Prisma } from "@prisma/client";
+import { type DocumentStatus, type Prisma, type StorageBackend } from "@prisma/client";
 import { cache } from "../config/cache.js";
 import { getPrisma } from "../config/database.js";
 import { deleteStorageObjects } from "../config/storage.js";
@@ -17,11 +17,14 @@ export async function uploadDocument(data: {
   fileSize: number;
   mimeType: string;
   storageKey: string;
+  storageBackend?: StorageBackend | undefined;
   fileHash?: string | undefined;
 }) {
   const prisma = getPrisma();
 
-  // Delete old file from R2 if replacing an existing document
+  // Delete old file from storage if replacing an existing document.
+  // deleteStorageObjects tries both backends so it works regardless of
+  // which one stored the previous file.
   const existing = await prisma.employeeDocument.findUnique({
     where: { userId_documentTypeId: { userId: data.userId, documentTypeId: data.documentTypeId } },
     select: { storageKey: true },
@@ -38,6 +41,7 @@ export async function uploadDocument(data: {
       fileSize: data.fileSize,
       mimeType: data.mimeType,
       storageKey: data.storageKey,
+      storageBackend: data.storageBackend ?? null,
       fileHash: data.fileHash ?? null,
       status: "PENDING",
       version: { increment: 1 },
@@ -54,6 +58,7 @@ export async function uploadDocument(data: {
       fileSize: data.fileSize,
       mimeType: data.mimeType,
       storageKey: data.storageKey,
+      storageBackend: data.storageBackend ?? null,
       fileHash: data.fileHash ?? null,
       status: "PENDING",
       uploadedAt: new Date(),

@@ -7,6 +7,7 @@ import {
   handleGetRecruiterTargets,
   handleGetMyTargets,
   handleGetTeamTargets,
+  handleGetTargetHistory,
 } from "../controllers/target.controller.js";
 import { requireAuth, requireAdmin } from "../middleware/auth.js";
 
@@ -18,6 +19,7 @@ router.get("/", requireAdmin, handleListTargets);
 router.post("/", requireAdmin, handleCreateTarget);
 router.patch("/:id", requireAdmin, handleUpdateTarget);
 router.delete("/:id", requireAdmin, handleDeleteTarget);
+router.get("/:id/history", requireAdmin, handleGetTargetHistory);
 
 // Recruiter / RM views — order matters: literal segments before :param
 router.get("/me", handleGetMyTargets);

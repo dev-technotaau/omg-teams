@@ -32,6 +32,7 @@ import {
   FileCheck,
   Webhook,
   Activity,
+  CheckSquare,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useAuth } from "@/contexts/auth";
@@ -71,6 +72,13 @@ const NAV_ITEMS: NavItem[] = [
   { label: "Add Report", href: ROUTES.REPORTS_NEW, icon: FilePlus, roles: [ROLES.RECRUITER] },
   { label: "My Reports", href: ROUTES.REPORTS, icon: FileText, roles: [ROLES.RECRUITER] },
   { label: "My Targets", href: ROUTES.MY_TARGETS, icon: Target, roles: [ROLES.RECRUITER] },
+  // §Task — open-task badge injected at render time
+  {
+    label: "My Tasks",
+    href: ROUTES.MY_TASKS,
+    icon: CheckSquare,
+    roles: [ROLES.RECRUITER, ROLES.REPORTING_MANAGER],
+  },
 
   // ── Reporting Manager ──
   {
@@ -153,6 +161,8 @@ const NAV_ITEMS: NavItem[] = [
   },
   { label: "Duplicates", href: ROUTES.ADMIN_DUPLICATES, icon: Copy, roles: [ROLES.ADMIN] },
   { label: "Targets", href: ROUTES.ADMIN_TARGETS, icon: Target, roles: [ROLES.ADMIN] },
+  // §Task — awaiting-review badge injected at render time
+  { label: "Tasks", href: ROUTES.ADMIN_TASKS, icon: CheckSquare, roles: [ROLES.ADMIN] },
   { label: "Import", href: ROUTES.ADMIN_IMPORT, icon: Upload, roles: [ROLES.ADMIN] },
   { label: "Sessions", href: ROUTES.ADMIN_SESSIONS, icon: Monitor, roles: [ROLES.ADMIN] },
   { label: "Audit Log", href: ROUTES.ADMIN_AUDIT_LOGS, icon: History, roles: [ROLES.ADMIN] },
@@ -189,6 +199,11 @@ export function Sidebar() {
   const { sidebarOpen, toggleSidebar } = useUIStore();
   const isMobile = useIsMobile();
   const [pendingDocCount, setPendingDocCount] = useState(0);
+  // §Task — sidebar badges
+  // For recruiter/RM: open task count (PENDING + REJECTED awaiting resubmit)
+  // For admin: count of submissions awaiting review
+  const [openTaskCount, setOpenTaskCount] = useState(0);
+  const [reviewTaskCount, setReviewTaskCount] = useState(0);
 
   // ── Persist + restore the scroll position of the nav list ──
   // Browser-native scroll restoration only works on body/html scroll,
@@ -247,10 +262,50 @@ export function Sidebar() {
     return () => clearInterval(interval);
   }, [role]);
 
+  // §Task — Recruiter / RM open task count (drives "My Tasks" badge)
+  useEffect(() => {
+    if (role !== "RECRUITER" && role !== "REPORTING_MANAGER") return;
+    const fetchCount = async () => {
+      try {
+        const res = await api.get<{ data: { count: number } }>("/tasks/me/open-count");
+        setOpenTaskCount(res.data.data.count);
+      } catch {
+        // non-critical
+      }
+    };
+    void fetchCount();
+    const interval = setInterval(() => void fetchCount(), 60_000);
+    return () => clearInterval(interval);
+  }, [role]);
+
+  // §Task — Admin awaiting-review count (drives "Tasks" badge in admin)
+  useEffect(() => {
+    if (role !== "ADMIN") return;
+    const fetchCount = async () => {
+      try {
+        const res = await api.get<{ data: { awaitingReview: number } }>("/tasks/stats");
+        setReviewTaskCount(res.data.data.awaitingReview);
+      } catch {
+        // non-critical
+      }
+    };
+    void fetchCount();
+    const interval = setInterval(() => void fetchCount(), 60_000);
+    return () => clearInterval(interval);
+  }, [role]);
+
   const filteredItems = NAV_ITEMS.filter((item) => item.roles.includes(role)).map((item) => {
     // Inject pending doc count badge on the admin Documents nav item
     if (item.href === ROUTES.ADMIN_DOCUMENTS && pendingDocCount > 0) {
       return { ...item, badge: pendingDocCount };
+    }
+    // §Task — open-task badge on the recruiter / RM My Tasks item
+    if (item.href === ROUTES.MY_TASKS && openTaskCount > 0) {
+      return { ...item, badge: openTaskCount };
+    }
+    // §Task — awaiting-review badge on the admin Tasks item
+    if (item.href === ROUTES.ADMIN_TASKS && reviewTaskCount > 0) {
+      return { ...item, badge: reviewTaskCount };
     }
     return item;
   });

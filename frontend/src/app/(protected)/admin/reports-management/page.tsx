@@ -16,10 +16,21 @@ import {
   Search,
   ExternalLink,
   AlertTriangle,
+  Columns3,
+  Bookmark,
+  X as XIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, extractApiError } from "@/lib/api";
-import { downloadReport } from "@/services/report.service";
+import {
+  downloadReport,
+  getColumnRegistry,
+  type ReportTemplate,
+  type ReportTypeColumnInfo,
+} from "@/services/report.service";
+import { ColumnPicker } from "@/components/reports/column-picker";
+import { TemplateManager } from "@/components/reports/template-manager";
+import { useAuth } from "@/contexts/auth";
 import {
   PageHeader,
   Card,
@@ -73,9 +84,27 @@ const REPORT_TYPES = [
   { value: "EMPLOYEE_PERFORMANCE_RECRUITERS", label: "Employee Performance (Recruiters)" },
   { value: "EMPLOYEE_PERFORMANCE_RMS", label: "Employee Performance (RMs)" },
   { value: "EMPLOYEE_PERFORMANCE_INDIVIDUAL", label: "Employee Performance (Individual)" },
+  { value: "CUSTOM", label: "Custom Report (pick your own columns)" },
 ] as const;
 
 const REPORT_TYPE_OPTIONS = REPORT_TYPES.map((r) => ({ value: r.value, label: r.label }));
+
+// ─── Shared column-registry hook (used by Generate + Schedule) ───
+function useColumnRegistry() {
+  return useQuery({
+    queryKey: qk.reportsManagement.columns(),
+    queryFn: () => getColumnRegistry(),
+    staleTime: 10 * 60 * 1000,
+  });
+}
+
+function findColumnInfo(
+  registry: ReportTypeColumnInfo[] | undefined,
+  reportType: string,
+): ReportTypeColumnInfo | null {
+  if (!registry || !reportType) return null;
+  return registry.find((r) => r.reportType === reportType) ?? null;
+}
 
 // §20.2 — Time range preset options
 const TIME_RANGE_PRESETS = [
@@ -183,6 +212,9 @@ interface Schedule {
   reportType: string;
   reportName: string;
   filters: Record<string, string> | null;
+  columnConfig: string[] | null;
+  templateId: string | null;
+  templateName: string | null;
   frequency: string;
   time: string;
   recipients: string[];
@@ -480,23 +512,83 @@ function useFilterData() {
 
 // ──────────────────────────────────────────────
 //  Tab 1: Generate & Download — §20.2
+//
+//  Column-aware: admin can pick & reorder columns for any report
+//  type. CUSTOM gives access to the full candidate pool. Templates
+//  save column selection + filters and can be loaded into the form
+//  with one click. The whole picker is collapsed into a disclosure
+//  until needed so the page stays tidy.
 // ──────────────────────────────────────────────
 function GenerateTab() {
+  const { user } = useAuth();
   const [reportType, setReportType] = useState("");
   const [filters, setFilters] = useState<ReportFilters>(EMPTY_FILTERS);
+  const [columnKeys, setColumnKeys] = useState<string[]>([]);
+  const [activeTemplate, setActiveTemplate] = useState<ReportTemplate | null>(null);
+  const [reportName, setReportName] = useState("");
+  const [showColumns, setShowColumns] = useState(false);
+  const [showTemplates, setShowTemplates] = useState(false);
   const [generating, setGenerating] = useState(false);
   const { companies, recruiters, employees } = useFilterData();
+  const registryQuery = useColumnRegistry();
+  const columnInfo = findColumnInfo(registryQuery.data, reportType);
+
+  // Show defaults in the picker until the user makes an explicit selection.
+  // Empty `columnKeys` means "use server defaults"; this only computes what
+  // the picker should display, never the submitted value.
+  const effectiveColumnKeys = useMemo(
+    () => (columnKeys.length > 0 ? columnKeys : (columnInfo?.defaultKeys ?? [])),
+    [columnKeys, columnInfo],
+  );
+
+  const handleReportTypeChange = (next: string) => {
+    setReportType(next);
+    setActiveTemplate(null);
+    const info = findColumnInfo(registryQuery.data, next);
+    if (info && columnKeys.length > 0) {
+      // Preserve keys still valid for the new type; drop the rest.
+      const allowed = new Set(info.columns.map((c) => c.key));
+      setColumnKeys(columnKeys.filter((k) => allowed.has(k)));
+    }
+  };
+
+  const loadTemplate = (tpl: ReportTemplate) => {
+    setReportType(tpl.reportType);
+    setColumnKeys(tpl.columnConfig);
+    if (tpl.filters && typeof tpl.filters === "object") {
+      setFilters({ ...EMPTY_FILTERS, ...(tpl.filters as Partial<ReportFilters>) });
+    }
+    setActiveTemplate(tpl);
+    if (!reportName.trim()) setReportName(tpl.name);
+    setShowColumns(true);
+    toast.success(`Loaded template "${tpl.name}"`);
+  };
+
+  const clearTemplate = () => {
+    setActiveTemplate(null);
+    if (columnInfo) setColumnKeys(columnInfo.defaultKeys);
+  };
 
   const handleGenerate = async () => {
     if (!reportType) {
       toast.error("Select a report type");
       return;
     }
+    if (effectiveColumnKeys.length === 0) {
+      toast.error("Select at least one column");
+      return;
+    }
     setGenerating(true);
     try {
       const apiFilters = filtersToApiParams(filters);
-
-      await downloadReport({ reportType, filters: apiFilters });
+      const payload: Parameters<typeof downloadReport>[0] = {
+        reportType,
+        filters: apiFilters,
+        columnKeys: effectiveColumnKeys,
+      };
+      if (activeTemplate) payload.templateId = activeTemplate.id;
+      if (reportName.trim()) payload.reportName = reportName.trim();
+      await downloadReport(payload);
       toast.success("Report generated and downloaded");
     } catch (err) {
       toast.error(extractApiError(err).message);
@@ -505,40 +597,117 @@ function GenerateTab() {
     }
   };
 
+  const selectedCount = effectiveColumnKeys.length;
+  const defaultCount = columnInfo?.defaultKeys.length ?? 0;
+  const isCustomized = columnKeys.length > 0;
+
   return (
-    <Card padding="lg" className="max-w-3xl">
-      <Card.Body>
-        <div className="space-y-5">
-          <FormField label="Report Type">
-            <Select
-              value={reportType}
-              onChange={(e) => setReportType(e.target.value)}
-              options={[{ value: "", label: "Select report type..." }, ...REPORT_TYPE_OPTIONS]}
+    <>
+      <Card padding="lg" className="max-w-5xl">
+        <Card.Body>
+          <div className="space-y-5">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <FormField label="Report Type">
+                <Select
+                  value={reportType}
+                  onChange={(e) => handleReportTypeChange(e.target.value)}
+                  options={[{ value: "", label: "Select report type..." }, ...REPORT_TYPE_OPTIONS]}
+                />
+              </FormField>
+              <FormField label="Report Name (optional)">
+                <Input
+                  value={reportName}
+                  onChange={(e) => setReportName(e.target.value)}
+                  placeholder="Shown in History — defaults to type + date"
+                />
+              </FormField>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                leftIcon={Columns3}
+                disabled={!reportType}
+                onClick={() => setShowColumns((s) => !s)}
+              >
+                Columns ({selectedCount}/{columnInfo?.columns.length ?? 0})
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                leftIcon={Bookmark}
+                onClick={() => setShowTemplates(true)}
+              >
+                Templates
+              </Button>
+              {activeTemplate && (
+                <span className="bg-bg-muted text-text-secondary flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs">
+                  <Bookmark size={12} />
+                  Loaded: {activeTemplate.name}
+                  <button
+                    type="button"
+                    aria-label="Clear template"
+                    className="hover:text-text-primary"
+                    onClick={clearTemplate}
+                  >
+                    <XIcon size={12} />
+                  </button>
+                </span>
+              )}
+              {isCustomized && columnInfo && (
+                <span className="text-text-secondary text-xs italic">
+                  Customized (default {defaultCount} columns)
+                </span>
+              )}
+            </div>
+
+            {showColumns && (
+              <ColumnPicker
+                info={columnInfo}
+                selectedKeys={effectiveColumnKeys}
+                onChange={setColumnKeys}
+              />
+            )}
+
+            <FilterFields
+              filters={filters}
+              onChange={setFilters}
+              companies={companies}
+              recruiters={recruiters}
+              employees={employees}
             />
-          </FormField>
 
-          <FilterFields
-            filters={filters}
-            onChange={setFilters}
-            companies={companies}
-            recruiters={recruiters}
-            employees={employees}
-          />
+            <Button leftIcon={Download} loading={generating} onClick={() => void handleGenerate()}>
+              Generate &amp; Download
+            </Button>
+          </div>
+        </Card.Body>
+      </Card>
 
-          <Button leftIcon={Download} loading={generating} onClick={() => void handleGenerate()}>
-            Generate &amp; Download
-          </Button>
-        </div>
-      </Card.Body>
-    </Card>
+      <TemplateManager
+        open={showTemplates}
+        onClose={() => setShowTemplates(false)}
+        reportType={reportType}
+        currentColumnKeys={effectiveColumnKeys}
+        currentFilters={filtersToApiParams(filters)}
+        onLoad={loadTemplate}
+        activeTemplateId={activeTemplate?.id ?? null}
+        currentUserId={user?.id ?? ""}
+      />
+    </>
   );
 }
 
 // ──────────────────────────────────────────────
 //  Tab 2: Schedule Email Reports — §20.3
+//  Column-aware: every schedule remembers its column selection.
+//  Linking a template lets edits to the template propagate to
+//  every schedule using it.
 // ──────────────────────────────────────────────
 function ScheduleTab() {
   const qc = useQueryClient();
+  const { user } = useAuth();
   const schedulesQuery = useQuery({
     queryKey: qk.reportsManagement.schedules(),
     queryFn: async () => {
@@ -552,6 +721,7 @@ function ScheduleTab() {
   const [editTarget, setEditTarget] = useState<Schedule | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Schedule | null>(null);
   const { companies, recruiters, employees } = useFilterData();
+  const registryQuery = useColumnRegistry();
 
   // Form state for create/edit modal
   const [formReportType, setFormReportType] = useState("");
@@ -560,6 +730,28 @@ function ScheduleTab() {
   const [formTime, setFormTime] = useState("");
   const [formRecipients, setFormRecipients] = useState("");
   const [formFilters, setFormFilters] = useState<ReportFilters>(EMPTY_FILTERS);
+  const [formColumnKeys, setFormColumnKeys] = useState<string[]>([]);
+  const [formTemplateId, setFormTemplateId] = useState<string | null>(null);
+  const [formTemplateName, setFormTemplateName] = useState<string | null>(null);
+  const [showColumns, setShowColumns] = useState(false);
+  const [showTemplates, setShowTemplates] = useState(false);
+  const formColumnInfo = findColumnInfo(registryQuery.data, formReportType);
+
+  // Empty `formColumnKeys` means "use server defaults"; the picker shows
+  // defaults until the user makes an explicit selection.
+  const effectiveFormColumnKeys = useMemo(
+    () => (formColumnKeys.length > 0 ? formColumnKeys : (formColumnInfo?.defaultKeys ?? [])),
+    [formColumnKeys, formColumnInfo],
+  );
+
+  const handleFormReportTypeChange = (next: string) => {
+    setFormReportType(next);
+    const info = findColumnInfo(registryQuery.data, next);
+    if (info && formColumnKeys.length > 0) {
+      const allowed = new Set(info.columns.map((c) => c.key));
+      setFormColumnKeys(formColumnKeys.filter((k) => allowed.has(k)));
+    }
+  };
 
   const fetchSchedules = useCallback(
     () => qc.invalidateQueries({ queryKey: qk.reportsManagement.schedules() }),
@@ -572,14 +764,22 @@ function ScheduleTab() {
     }
   }, [schedulesQuery.isError, schedulesQuery.error]);
 
-  const openCreate = () => {
-    setEditTarget(null);
+  const resetForm = () => {
     setFormReportType("");
     setFormReportName("");
     setFormFrequency("");
     setFormTime("");
     setFormRecipients("");
     setFormFilters(EMPTY_FILTERS);
+    setFormColumnKeys([]);
+    setFormTemplateId(null);
+    setFormTemplateName(null);
+    setShowColumns(false);
+  };
+
+  const openCreate = () => {
+    setEditTarget(null);
+    resetForm();
     setShowModal(true);
   };
 
@@ -590,12 +790,35 @@ function ScheduleTab() {
     setFormFrequency(s.frequency);
     setFormTime(s.time);
     setFormRecipients(s.recipients.join(", "));
-    // Restore filters from schedule
     setFormFilters({
       ...EMPTY_FILTERS,
       ...(s.filters as Partial<ReportFilters> | null),
     });
+    // Restore the schedule's saved column selection (empty array → fall
+    // back to defaults via the useEffect once registry loads).
+    setFormColumnKeys(s.columnConfig ?? []);
+    setFormTemplateId(s.templateId);
+    setFormTemplateName(s.templateName);
+    setShowColumns(false);
     setShowModal(true);
+  };
+
+  const loadTemplateIntoForm = (tpl: ReportTemplate) => {
+    setFormReportType(tpl.reportType);
+    setFormColumnKeys(tpl.columnConfig);
+    if (tpl.filters && typeof tpl.filters === "object") {
+      setFormFilters({ ...EMPTY_FILTERS, ...(tpl.filters as Partial<ReportFilters>) });
+    }
+    setFormTemplateId(tpl.id);
+    setFormTemplateName(tpl.name);
+    if (!formReportName.trim()) setFormReportName(tpl.name);
+    setShowColumns(true);
+    toast.success(`Loaded template "${tpl.name}"`);
+  };
+
+  const clearFormTemplate = () => {
+    setFormTemplateId(null);
+    setFormTemplateName(null);
   };
 
   const toggleStatus = async (s: Schedule) => {
@@ -635,7 +858,21 @@ function ScheduleTab() {
       toast.error("Add at least one recipient email");
       return;
     }
-    const payload = {
+    if (effectiveFormColumnKeys.length === 0) {
+      toast.error("Select at least one column");
+      return;
+    }
+    type SchedulePayload = {
+      reportType: string;
+      reportName: string;
+      frequency: string;
+      time: string;
+      recipients: string[];
+      filters: Record<string, string>;
+      columnKeys: string[] | null;
+      templateId: string | null;
+    };
+    const payload: SchedulePayload = {
       reportType: formReportType,
       reportName:
         formReportName ||
@@ -645,6 +882,8 @@ function ScheduleTab() {
       time: formTime,
       recipients,
       filters: filtersToApiParams(formFilters),
+      columnKeys: effectiveFormColumnKeys,
+      templateId: formTemplateId,
     };
     try {
       if (editTarget) {
@@ -684,6 +923,22 @@ function ScheduleTab() {
       cell: (s) => <Badge variant={freqVariant(s.frequency)}>{s.frequency}</Badge>,
     },
     { key: "time", header: "Time" },
+    {
+      key: "columns",
+      header: "Columns",
+      cell: (s) => {
+        const count = s.columnConfig?.length;
+        if (count) {
+          return (
+            <span className="text-text-secondary text-xs">
+              {count} column{count === 1 ? "" : "s"}
+              {s.templateName ? ` · ${s.templateName}` : ""}
+            </span>
+          );
+        }
+        return <span className="text-text-tertiary text-xs italic">Default</span>;
+      },
+    },
     {
       key: "recipients",
       header: "Recipients",
@@ -764,7 +1019,7 @@ function ScheduleTab() {
             <FormField label="Report Type" required>
               <Select
                 value={formReportType}
-                onChange={(e) => setFormReportType(e.target.value)}
+                onChange={(e) => handleFormReportTypeChange(e.target.value)}
                 options={[{ value: "", label: "Select..." }, ...REPORT_TYPE_OPTIONS]}
               />
             </FormField>
@@ -802,6 +1057,53 @@ function ScheduleTab() {
             </FormField>
           </div>
 
+          {/* §20.3 — Columns + Templates row */}
+          <div className="border-border-default rounded-lg border p-4">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-text-secondary text-sm font-medium">Columns &amp; Template</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  leftIcon={Columns3}
+                  disabled={!formReportType}
+                  onClick={() => setShowColumns((s) => !s)}
+                >
+                  Columns ({effectiveFormColumnKeys.length}/{formColumnInfo?.columns.length ?? 0})
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  leftIcon={Bookmark}
+                  onClick={() => setShowTemplates(true)}
+                >
+                  Templates
+                </Button>
+                {formTemplateName && (
+                  <span className="bg-bg-muted text-text-secondary flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs">
+                    <Bookmark size={12} />
+                    {formTemplateName}
+                    <button
+                      type="button"
+                      aria-label="Unlink template"
+                      className="hover:text-text-primary"
+                      onClick={clearFormTemplate}
+                    >
+                      <XIcon size={12} />
+                    </button>
+                  </span>
+                )}
+              </div>
+            </div>
+            {showColumns && (
+              <ColumnPicker
+                info={formColumnInfo}
+                selectedKeys={effectiveFormColumnKeys}
+                onChange={setFormColumnKeys}
+              />
+            )}
+          </div>
+
           {/* §20.3 — All filtering/scoping options same as Generate */}
           <div className="border-border-default rounded-lg border p-4">
             <p className="text-text-secondary mb-3 text-sm font-medium">
@@ -826,6 +1128,17 @@ function ScheduleTab() {
           </div>
         </div>
       </Modal>
+
+      <TemplateManager
+        open={showTemplates}
+        onClose={() => setShowTemplates(false)}
+        reportType={formReportType}
+        currentColumnKeys={effectiveFormColumnKeys}
+        currentFilters={filtersToApiParams(formFilters)}
+        onLoad={loadTemplateIntoForm}
+        activeTemplateId={formTemplateId}
+        currentUserId={user?.id ?? ""}
+      />
 
       <ConfirmDialog
         open={!!deleteTarget}

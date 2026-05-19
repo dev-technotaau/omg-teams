@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useClickOutside } from "@/hooks";
 import { useMutation, useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { qk } from "@/lib/query-keys";
 import { toastApiError } from "@/lib/query-helpers";
@@ -148,6 +149,12 @@ function EmployeePicker({
 }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<UserOption[]>([]);
+  const containerRef = useRef<HTMLDivElement>(null);
+  // Dismiss the search-results dropdown when the user clicks elsewhere
+  // (without picking a row) so it doesn't stay floating over the form.
+  useClickOutside(containerRef, () => {
+    if (results.length > 0) setResults([]);
+  });
 
   useEffect(() => {
     if (query.length < 2) {
@@ -189,7 +196,7 @@ function EmployeePicker({
   }
 
   return (
-    <div className="relative">
+    <div className="relative" ref={containerRef}>
       <Input
         id={id}
         value={query}

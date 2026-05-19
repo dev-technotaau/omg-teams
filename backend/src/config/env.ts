@@ -231,10 +231,23 @@ export const env = {
     return this.SMTP_HOST !== "";
   },
   get hasR2(): boolean {
-    return this.R2_BUCKET !== "" && this.R2_ACCESS_KEY_ID !== "";
+    // All four are required: ACCOUNT_ID for the endpoint URL, ACCESS_KEY_ID +
+    // SECRET_ACCESS_KEY for SigV4, BUCKET as the target. Partial config used to
+    // pass this check and crash inside the S3 SDK at first upload.
+    return (
+      this.R2_ACCOUNT_ID !== "" &&
+      this.R2_ACCESS_KEY_ID !== "" &&
+      this.R2_SECRET_ACCESS_KEY !== "" &&
+      this.R2_BUCKET !== ""
+    );
   },
   get hasCloudinary(): boolean {
-    return this.CLOUDINARY_CLOUD_NAME !== "" && this.CLOUDINARY_API_KEY !== "";
+    // API_SECRET is required for both uploads and signed-URL generation.
+    return (
+      this.CLOUDINARY_CLOUD_NAME !== "" &&
+      this.CLOUDINARY_API_KEY !== "" &&
+      this.CLOUDINARY_API_SECRET !== ""
+    );
   },
   get hasSentry(): boolean {
     return this.SENTRY_DSN !== "";

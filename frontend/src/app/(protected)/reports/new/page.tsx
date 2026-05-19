@@ -10,7 +10,11 @@ import { toast } from "sonner";
 import { useAuth } from "@/contexts/auth";
 import { createCandidate, checkDuplicates } from "@/services/candidate.service";
 import { saveDraft, getDraft, deleteDraft } from "@/services/draft.service";
-import { getDropdownOptions, type DropdownOption } from "@/services/dropdown.service";
+import {
+  getDropdownOptions,
+  createDropdownOption,
+  type DropdownOption,
+} from "@/services/dropdown.service";
 import {
   PageHeader,
   Card,
@@ -18,6 +22,7 @@ import {
   Input,
   PhoneInput,
   Select,
+  Combobox,
   Textarea,
   Button,
   Alert,
@@ -382,28 +387,46 @@ export default function AddReportPage() {
                   />
                 )}
               </FormField>
-              {/* §23.19 — Location cascades from the selected state */}
+              {/* §23.19 — Location cascades from the selected state.
+                  Backfill: typing a brand-new location and selecting "+ Add"
+                  (or pressing Enter / blurring) creates it under the chosen
+                  state, returns the label, and re-fetches the list so future
+                  recruiters see it. */}
               <FormField label="Location" htmlFor="location">
-                {filteredLocations.length > 0 ? (
-                  <Select
-                    {...register("location")}
-                    onBlur={handleFieldBlur}
-                    placeholder="Select location..."
-                    options={toSelectOptions(filteredLocations)}
-                    searchable
-                  />
-                ) : (
-                  <Input
-                    {...register("location")}
-                    onBlur={handleFieldBlur}
-                    disabled={!selectedStateId}
-                    placeholder={
-                      !selectedStateId
-                        ? "Pick a state first"
-                        : "No locations configured for this state"
+                <Combobox
+                  value={(watch("location") as string) ?? ""}
+                  onChange={(label) =>
+                    setValue("location", label, { shouldValidate: true, shouldDirty: true })
+                  }
+                  options={filteredLocations.map((l) => ({ value: l.value, label: l.label }))}
+                  placeholder={
+                    !selectedStateId
+                      ? "Pick a state first"
+                      : "Type to search or add a new location..."
+                  }
+                  disabled={!selectedStateId}
+                  creatable
+                  createDisabledReason={
+                    !selectedStateId ? "Select a state before adding a location" : null
+                  }
+                  onCreate={async (label) => {
+                    if (!selectedStateId) throw new Error("Pick a state first");
+                    try {
+                      const created = await createDropdownOption({
+                        category: "LOCATION",
+                        label,
+                        parentId: selectedStateId,
+                      });
+                      await dropdownsQuery.refetch();
+                      toast.success(`Added location "${created.label}"`);
+                      return created.label;
+                    } catch (err) {
+                      toast.error("Could not add location");
+                      throw err;
                     }
-                  />
-                )}
+                  }}
+                  onBlur={handleFieldBlur}
+                />
               </FormField>
               <FormField label="Date of Birth" htmlFor="dateOfBirth">
                 <CalendarDatePicker
@@ -521,19 +544,32 @@ export default function AddReportPage() {
           </Card.Header>
           <Card.Body>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              {/* §23.19 — Profile from dropdown service */}
+              {/* §23.19 — Profile from dropdown service, with inline backfill */}
               <FormField label="Profile" htmlFor="profile">
-                {profileOptions.length > 0 ? (
-                  <Select
-                    {...register("profile")}
-                    onBlur={handleFieldBlur}
-                    placeholder="Select profile..."
-                    options={toSelectOptions(profileOptions)}
-                    searchable
-                  />
-                ) : (
-                  <Input {...register("profile")} onBlur={handleFieldBlur} />
-                )}
+                <Combobox
+                  value={(watch("profile") as string) ?? ""}
+                  onChange={(label) =>
+                    setValue("profile", label, { shouldValidate: true, shouldDirty: true })
+                  }
+                  options={profileOptions.map((p) => ({ value: p.value, label: p.label }))}
+                  placeholder="Type to search or add a new profile..."
+                  creatable
+                  onCreate={async (label) => {
+                    try {
+                      const created = await createDropdownOption({
+                        category: "PROFILE",
+                        label,
+                      });
+                      await dropdownsQuery.refetch();
+                      toast.success(`Added profile "${created.label}"`);
+                      return created.label;
+                    } catch (err) {
+                      toast.error("Could not add profile");
+                      throw err;
+                    }
+                  }}
+                  onBlur={handleFieldBlur}
+                />
               </FormField>
               <FormField label="Years of Experience" htmlFor="yearsOfExperience">
                 <Input

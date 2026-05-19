@@ -162,7 +162,30 @@ enum NotificationCategory {
   SYSTEM
   REPORT
   TARGET
+  TASK
   GENERAL
+}
+
+/// §Task — Admin-assigned tasks to recruiters/RMs with submission + review flow.
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+/// Overall task lifecycle. Per-assignee status lives on TaskAssignment.
+enum TaskStatus {
+  ACTIVE      // task is open, assignees can work on it
+  CANCELLED   // admin cancelled the whole task before completion
+}
+
+/// Per-assignee task state — each recruiter/RM has independent progress.
+enum TaskAssignmentStatus {
+  PENDING     // assigned, not yet submitted
+  SUBMITTED   // employee marked complete, awaiting admin review
+  ACCEPTED    // admin accepted the submission
+  REJECTED    // admin rejected with a note; employee can resubmit
 }
 
 enum DropdownCategory {
@@ -196,6 +219,16 @@ enum HalfDayPeriod {
   SECOND_HALF
 }
 
+/// Which storage backend a given file lives in. Stored next to every
+/// `storageKey` column so we never have to guess from the key's shape
+/// (both R2 keys and Cloudinary publicIds look like `folder/.../name.ext`).
+/// Nullable on existing rows pre-dating the column — see getSignedDownloadUrl
+/// which falls back to the configured-default heuristic when null.
+enum StorageBackend {
+  CLOUDINARY
+  R2
+}
+
 // ══════════════════════════════════════════════
 //  33.1 USER & AUTHENTICATION (6 models)
 // ══════════════════════════════════════════════
@@ -210,8 +243,9 @@ model User {
   role                   Role
   firstName              String        @map("first_name")
   lastName               String        @map("last_name")
-  profilePhotoUrl        String?       @map("profile_photo_url")
-  profilePhotoStorageKey String?       @map("profile_photo_storage_key")
+  profilePhotoUrl            String?         @map("profile_photo_url")
+  profilePhotoStorageKey     String?         @map("profile_photo_storage_key")
+  profilePhotoStorageBackend StorageBackend? @map("profile_photo_storage_backend")
   mobileNumber           String?       @map("mobile_number")
   address                String?
   deviceId               String?       @map("device_id")
@@ -268,6 +302,12 @@ model User {
   impersonationsPerformed    ImpersonationSession[]       @relation("ImpersonationAdmin")
   impersonationsReceived     ImpersonationSession[]       @relation("ImpersonationTarget")
   archivedActions            ArchivedRecord[]             @relation("ArchivedRecordActor")
+  // §Task — admin-assigned task system
+  createdTasks               Task[]                       @relation("TaskCreator")
+  taskAssignments            TaskAssignment[]             @relation("TaskAssignee")
+  decidedTaskSubmissions     TaskAssignment[]             @relation("TaskDecider")
+  // §Reports — saved column/filter templates owned by this user
+  reportTemplates            ReportTemplate[]             @relation("ReportTemplateCreator")
 
   @@index([role])
   @@index([status])
@@ -742,11 +782,16 @@ model GeneratedReport {
   reportName      String       @map("report_name")
   source          ReportSource
   filters         Json?
+  /// §Reports — Snapshot of the column keys (in order) used to build this
+  /// file. Lets History re-show the exact layout, and supports re-running
+  /// from the audit trail. Null for legacy rows.
+  columnConfig    Json?           @map("column_config")
   generatedAt     DateTime     @default(now()) @map("generated_at")
   fileSize        Int?         @map("file_size")
-  cloudUrl        String?      @map("cloud_url")
-  cloudStorageKey String?      @map("cloud_storage_key")
-  expiresAt       DateTime?    @map("expires_at")
+  cloudUrl        String?         @map("cloud_url")
+  cloudStorageKey String?         @map("cloud_storage_key")
+  storageBackend  StorageBackend? @map("storage_backend")
+  expiresAt       DateTime?       @map("expires_at")
   isExpired       Boolean      @default(false) @map("is_expired")
   createdByUserId String?      @map("created_by_user_id")
 
@@ -765,6 +810,13 @@ model ScheduledReportConfig {
   reportType  ReportType      @map("report_type")
   reportName  String          @map("report_name")
   filters     Json?
+  /// §Reports — Custom column selection + ordering for this schedule.
+  /// JSON array of column keys. Null falls back to the report type's default set.
+  columnConfig Json?          @map("column_config")
+  /// Optional pointer to a ReportTemplate. When set, the worker prefers
+  /// the template's `columnConfig` and `filters` over the row's own (so
+  /// editing the template updates every schedule using it).
+  templateId  String?         @map("template_id")
   frequency   ReportFrequency
   timing      Json?                           // { hour, minute, dayOfMonth, monthOfYear }
   isActive    Boolean         @default(true)   @map("is_active")
@@ -773,8 +825,49 @@ model ScheduledReportConfig {
 
   recipients   ScheduledReportRecipient[]
   deliveryLogs ReportDeliveryLog[]
+  template     ReportTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
 
+  @@index([templateId])
   @@map("scheduled_report_configs")
+}
+
+/// §Reports — Saved report template (column selection + ordering + default
+/// filters) that can be reused across Generate & Schedule. Created per
+/// admin or shared platform-wide.
+model ReportTemplate {
+  id            String     @id @default(cuid())
+  /// Admin-facing display name. Doesn't need to be unique globally but must
+  /// be unique per (createdById, reportType) — admins can't have two
+  /// "Monthly Recap" templates of the same type.
+  name          String
+  /// Which underlying report type the template renders. CUSTOM means the
+  /// admin chose columns freely from the candidate-report pool.
+  reportType    ReportType  @map("report_type")
+  /// Ordered array of column keys (strings) — exact subset of the
+  /// available columns for `reportType`. Validated against the column
+  /// registry on save (see report-columns.ts).
+  columnConfig  Json        @map("column_config")
+  /// Optional default filters applied when this template is loaded.
+  /// Admin can override any of them at generation time.
+  filters       Json?
+  /// Free-text description shown in the template picker.
+  description   String?
+  /// Soft-shared flag — when true, every admin can see + use this
+  /// template (useful for org-wide standard reports). When false, only
+  /// the creator sees it. (Reserved — UI currently treats every template
+  /// as visible to the creator and uses isShared for future RBAC.)
+  isShared      Boolean     @default(false) @map("is_shared")
+  createdById   String      @map("created_by_id")
+  createdAt     DateTime    @default(now()) @map("created_at")
+  updatedAt     DateTime    @updatedAt @map("updated_at")
+
+  createdBy        User                    @relation("ReportTemplateCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  scheduledConfigs ScheduledReportConfig[]
+
+  @@unique([createdById, reportType, name])
+  @@index([reportType])
+  @@index([createdById])
+  @@map("report_templates")
 }
 
 /// Recipients per scheduled report
@@ -1011,6 +1104,7 @@ model EmployeeDocument {
   mimeType        String?        @map("mime_type")
   fileHash        String?        @map("file_hash") // SHA-256
   storageKey      String?        @map("storage_key")
+  storageBackend  StorageBackend? @map("storage_backend")
   status          DocumentStatus @default(NOT_UPLOADED)
   verifiedBy      String?        @map("verified_by")
   verifiedAt      DateTime?      @map("verified_at")
@@ -1066,6 +1160,7 @@ model OfferLetter {
   generatedFileUrl  String?            @map("generated_file_url")
   generatedFileHash String?            @map("generated_file_hash") // SHA-256
   storageKey        String?            @map("storage_key") // R2/Cloudinary key
+  storageBackend    StorageBackend?    @map("storage_backend")
   status            String             @default("DRAFT") // DRAFT | GENERATED | SENT
   generatedBy       String             @map("generated_by")
   generatedAt       DateTime           @default(now()) @map("generated_at")
@@ -1354,6 +1449,73 @@ model FilterPreset {
 
   @@index([userId, pageKey])
   @@map("filter_presets")
+}
+
+// ══════════════════════════════════════════════
+//  §Task — Admin-assigned task system
+//
+//  Admin creates a Task with subject + rich-text body + dates + priority,
+//  assigns to one or more recruiters/RMs. Each assignee has independent
+//  state (TaskAssignment): pending → submitted → accepted / rejected
+//  (with rejection allowing resubmit). Audit logged via audit.service.
+// ══════════════════════════════════════════════
+
+/// Admin-defined task assigned to one or more recruiters/RMs.
+model Task {
+  id            String       @id @default(cuid())
+  subject       String
+  /// Rich-text HTML body (Tiptap editor output)
+  body          String
+  priority      TaskPriority @default(MEDIUM)
+  startDate     DateTime     @map("start_date")
+  endDate       DateTime     @map("end_date")
+  status        TaskStatus   @default(ACTIVE)
+  cancelledAt   DateTime?    @map("cancelled_at")
+  cancelReason  String?      @map("cancel_reason")
+  createdById   String       @map("created_by_id")
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @updatedAt @map("updated_at")
+  deletedAt     DateTime?    @map("deleted_at")
+  deletedBy     String?      @map("deleted_by")
+
+  createdBy   User             @relation("TaskCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  assignments TaskAssignment[]
+
+  @@index([status])
+  @@index([endDate])
+  @@index([priority])
+  @@index([deletedAt])
+  @@index([createdById, createdAt])
+  @@map("tasks")
+}
+
+/// Per-assignee progress on a Task. One row per (task, employee) pair.
+/// Each employee submits / gets reviewed independently.
+model TaskAssignment {
+  id              String                @id @default(cuid())
+  taskId          String                @map("task_id")
+  userId          String                @map("user_id")
+  status          TaskAssignmentStatus  @default(PENDING)
+  submittedAt     DateTime?             @map("submitted_at")
+  /// Note the employee adds when marking complete (optional).
+  submissionNote  String?               @map("submission_note")
+  decidedAt       DateTime?             @map("decided_at")
+  decidedById     String?               @map("decided_by_id")
+  /// Required when status=REJECTED so the employee knows why.
+  decisionNote    String?               @map("decision_note")
+  /// Bumps every time the employee resubmits after rejection.
+  submissionCount Int                   @default(0) @map("submission_count")
+  createdAt       DateTime              @default(now()) @map("created_at")
+  updatedAt       DateTime              @updatedAt @map("updated_at")
+
+  task      Task  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user      User  @relation("TaskAssignee", fields: [userId], references: [id], onDelete: Cascade)
+  decidedBy User? @relation("TaskDecider", fields: [decidedById], references: [id], onDelete: SetNull)
+
+  @@unique([taskId, userId])
+  @@index([userId, status])
+  @@index([status])
+  @@map("task_assignments")
 }
 
 /// Admin impersonation sessions for accountability

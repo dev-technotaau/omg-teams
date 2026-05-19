@@ -66,7 +66,9 @@ export default function MyDocumentsPage() {
       const file = uploadFiles[0];
       const result = await uploadKycDocument(file);
 
-      // Step 2: Create document record with the returned metadata
+      // Step 2: Create document record with the returned metadata.
+      // Forward storageBackend so the DB row records which backend stored the
+      // file — the signed-url helper no longer has to guess from the key shape.
       await api.post("/documents/upload", {
         documentTypeId: uploadTarget.id,
         fileUrl: result.url,
@@ -74,6 +76,7 @@ export default function MyDocumentsPage() {
         fileSize: result.size ?? file.size,
         mimeType: result.mimeType ?? file.type,
         storageKey: result.storageKey,
+        ...(result.storageBackend && { storageBackend: result.storageBackend }),
       });
 
       toast.success("Document uploaded");

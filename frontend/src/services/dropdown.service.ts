@@ -29,3 +29,34 @@ export async function getDropdownOptions(category: string): Promise<DropdownOpti
   const res = await api.get<{ data: DropdownOption[] }>(`/dropdowns/${category}`);
   return res.data.data ?? [];
 }
+
+export interface CreateDropdownOptionInput {
+  category: string;
+  label: string;
+  /** Defaults to lowercase(label) when omitted. */
+  value?: string;
+  /** Required for LOCATION rows — parent state's id. */
+  parentId?: string | null;
+  /** Required for STATE rows — geographic zone. */
+  zone?: Zone | null;
+}
+
+/**
+ * Create (or reactivate / return-existing) a dropdown option. Used by the
+ * candidate form's "+ Add [value]" backfill affordance for Location and
+ * Profile fields. Backend is idempotent — calling with a value that already
+ * exists for the same (category, parentId) just returns the existing row.
+ */
+export async function createDropdownOption(
+  input: CreateDropdownOptionInput,
+): Promise<DropdownOption> {
+  const value = (input.value ?? input.label).trim().toLowerCase();
+  const res = await api.post<{ data: DropdownOption }>("/dropdowns", {
+    category: input.category,
+    value,
+    label: input.label.trim(),
+    parentId: input.parentId ?? null,
+    zone: input.zone ?? null,
+  });
+  return res.data.data;
+}

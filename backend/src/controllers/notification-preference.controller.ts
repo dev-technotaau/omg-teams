@@ -19,6 +19,8 @@ const NotificationCategorySchema = z.enum([
   "SYSTEM",
   "REPORT",
   "TARGET",
+  "TASK",
+  "GENERAL",
 ]);
 
 const PreferenceFieldsSchema = z
@@ -49,8 +51,33 @@ const BulkUpdateSchema = z.object({
       }),
     )
     .min(1, "At least one preference entry is required")
-    .max(8, "Cannot exceed 8 preference entries"),
+    // Bumped from 8 → 12 when TASK + GENERAL joined the category enum
+    .max(12, "Cannot exceed 12 preference entries"),
 });
+
+/**
+ * §11.5 — Quiet hours window (HH:mm 24-hour). Either both fields are
+ * provided (enable / update) or both are null (disable).
+ */
+const QuietHoursSchema = z
+  .object({
+    quietHoursStart: z
+      .string()
+      .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Expected HH:mm")
+      .nullable(),
+    quietHoursEnd: z
+      .string()
+      .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Expected HH:mm")
+      .nullable(),
+  })
+  .refine(
+    (d) => (d.quietHoursStart === null) === (d.quietHoursEnd === null),
+    {
+      message:
+        "Provide both quietHoursStart and quietHoursEnd to enable, or both null to disable",
+      path: ["quietHoursEnd"],
+    },
+  );
 
 // ──────────────────────────────────────────────
 //  Handlers
@@ -130,4 +157,37 @@ export async function updateMyPreferences(req: Request, res: Response): Promise<
     })),
   );
   res.status(200).json({ preferences });
+}
+
+/**
+ * GET /api/v1/notification-preferences/quiet-hours
+ * Returns { quietHoursStart, quietHoursEnd } — both null when disabled.
+ */
+export async function getQuietHours(req: Request, res: Response): Promise<void> {
+  const data = await prefSvc.getQuietHours(req.user!.id);
+  res.status(HttpStatus.OK).json({ data });
+}
+
+/**
+ * PATCH /api/v1/notification-preferences/quiet-hours
+ * Body: { quietHoursStart, quietHoursEnd } — both HH:mm strings to enable,
+ * both null to disable.
+ */
+export async function updateQuietHours(req: Request, res: Response): Promise<void> {
+  const result = QuietHoursSchema.safeParse(req.body);
+  if (!result.success) {
+    throw new AppError(
+      "Invalid quiet hours",
+      HttpStatus.BAD_REQUEST,
+      ErrorCode.VALIDATION_ERROR,
+      {
+        details: result.error.issues.map((i) => ({
+          path: i.path.join("."),
+          message: i.message,
+        })),
+      },
+    );
+  }
+  const data = await prefSvc.updateQuietHours(req.user!.id, result.data);
+  res.status(HttpStatus.OK).json({ data });
 }

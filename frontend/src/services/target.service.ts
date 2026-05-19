@@ -6,6 +6,13 @@ import { api } from "@/lib/api";
 
 export type TargetType = "DAILY" | "WEEKLY" | "MONTHLY";
 
+/**
+ * Derived status combining raw `isActive` with the effective-date window.
+ * A row is only operationally "active" if isActive=true AND effectiveFrom ≤
+ * today ≤ effectiveTo (or effectiveTo is null = ongoing).
+ */
+export type EffectiveStatus = "ACTIVE" | "SCHEDULED" | "EXPIRED" | "INACTIVE";
+
 export interface Target {
   id: string;
   /** null = global default applied to recruiters with no individual override */
@@ -33,6 +40,25 @@ export interface Target {
    * to all recruiters, no single number is meaningful).
    */
   achieved?: number;
+  /** Derived status that respects effectiveFrom / effectiveTo. */
+  effectiveStatus?: EffectiveStatus;
+  /** Positive = days until start, negative = days since start, null = unknown. */
+  daysUntilStart?: number | null;
+  /** Positive = days until end, negative = days past end, null = ongoing. */
+  daysUntilEnd?: number | null;
+  /**
+   * On INDIVIDUAL rows only — the target value of the currently-active
+   * global default of the same type that this individual is shadowing.
+   * `null` if there is no active global default of this type (so this
+   * individual isn't overriding anything).
+   */
+  overridesGlobalValue?: number | null;
+  /**
+   * On GLOBAL DEFAULT rows only — how many ACTIVE recruiters have an
+   * individual override of the same type that suppresses this default
+   * for them. `0` when the default is fully applied.
+   */
+  suppressedByRecruiterCount?: number;
 }
 
 export interface TeamRecruiterTargets {
@@ -40,10 +66,18 @@ export interface TeamRecruiterTargets {
   targets: Target[];
 }
 
-export async function listTargets(filters?: { recruiterId?: string; isActive?: boolean }) {
+export async function listTargets(filters?: {
+  recruiterId?: string;
+  isActive?: boolean;
+  effectiveStatus?: EffectiveStatus;
+  endingWithinDays?: number;
+}) {
   const params: Record<string, string> = {};
   if (filters?.recruiterId) params["recruiterId"] = filters.recruiterId;
   if (filters?.isActive !== undefined) params["isActive"] = String(filters.isActive);
+  if (filters?.effectiveStatus) params["effectiveStatus"] = filters.effectiveStatus;
+  if (filters?.endingWithinDays !== undefined)
+    params["endingWithinDays"] = String(filters.endingWithinDays);
   const res = await api.get<{ data: Target[] }>("/targets", { params });
   return res.data.data;
 }
@@ -62,9 +96,30 @@ export async function createTarget(data: {
 
 export async function updateTarget(
   id: string,
-  data: Partial<{ targetValue: number; effectiveTo: string | null; isActive: boolean }>,
+  data: Partial<{
+    targetValue: number;
+    /** Backend only accepts when target is currently SCHEDULED. */
+    effectiveFrom: string;
+    effectiveTo: string | null;
+    isActive: boolean;
+  }>,
 ) {
   const res = await api.patch<{ data: Target }>(`/targets/${id}`, data);
+  return res.data.data;
+}
+
+// ── Per-target history (§23.1 + §23.9) ───────────────────────
+export interface TargetHistoryEntry {
+  id: string;
+  action: string; // CREATE | UPDATE | DELETE
+  timestamp: string;
+  changes: Record<string, { old: unknown; new: unknown }> | null;
+  ipAddress: string | null;
+  user: { firstName: string; lastName: string; employeeId: string | null } | null;
+}
+
+export async function getTargetHistory(id: string) {
+  const res = await api.get<{ data: TargetHistoryEntry[] }>(`/targets/${id}/history`);
   return res.data.data;
 }
 

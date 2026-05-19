@@ -109,6 +109,7 @@ export async function updateOfferLetter(
     generatedFileUrl?: string;
     generatedFileHash?: string;
     storageKey?: string;
+    storageBackend?: "CLOUDINARY" | "R2";
   },
 ) {
   const prisma = getPrisma();
@@ -119,6 +120,7 @@ export async function updateOfferLetter(
   if (data.generatedFileHash !== undefined)
     updateData["generatedFileHash"] = data.generatedFileHash;
   if (data.storageKey !== undefined) updateData["storageKey"] = data.storageKey;
+  if (data.storageBackend !== undefined) updateData["storageBackend"] = data.storageBackend;
   return prisma.offerLetter.update({ where: { id }, data: updateData });
 }
 
@@ -137,11 +139,12 @@ export async function regenerateOfferLetter(oldId: string, generatedBy: string) 
 
   await prisma.offerLetter.update({ where: { id: oldId }, data: { isArchived: true } });
 
-  // Clean up old PDF from R2 if it exists
-  if (old.generatedFileUrl) {
-    const oldKey = `offer-letters/${old.userId}/${old.referenceNumber}.pdf`;
-    void deleteStorageObjects([oldKey]);
-    logger.info("Old offer letter PDF queued for deletion", { oldId, oldKey });
+  // Clean up old PDF from storage. Read the stored storageKey directly —
+  // the previous code reconstructed an R2-shaped path, which would never
+  // match a Cloudinary publicId (different folder/extension convention).
+  if (old.storageKey) {
+    void deleteStorageObjects([old.storageKey]);
+    logger.info("Old offer letter PDF queued for deletion", { oldId, oldKey: old.storageKey });
   }
 
   const referenceNumber = await generateReferenceNumber();

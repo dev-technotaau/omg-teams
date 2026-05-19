@@ -9,7 +9,7 @@ import {
   CheckCircle,
   Eye,
   FileText,
-  DollarSign,
+  IndianRupee,
   MoreVertical,
   GitBranch,
   CreditCard,
@@ -514,7 +514,7 @@ export default function AdminReportsPage() {
                 },
                 {
                   label: "MIS / Invoice",
-                  icon: DollarSign,
+                  icon: IndianRupee,
                   onClick: () => window.open(`/admin/reports/${r.id}?tab=mis`, "_self"),
                 },
               ],

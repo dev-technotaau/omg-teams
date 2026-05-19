@@ -8,5 +8,7 @@ export const NOTIFICATION_CATEGORIES = [
   { value: "leave", label: "Leave" },
   { value: "report", label: "Reports" },
   { value: "document", label: "Documents" },
+  { value: "task", label: "Tasks" },
+  { value: "target", label: "Targets" },
   { value: "system", label: "System" },
 ] as const;

@@ -28,7 +28,9 @@ import {
   Database,
   Mail,
   BarChart2,
+  CheckSquare,
 } from "lucide-react";
+import { getAdminTaskStats, type AdminTaskStats } from "@/services/task.service";
 import { toast } from "sonner";
 import {
   getKPISummary,
@@ -304,6 +306,14 @@ export default function AnalyticsPage() {
   const [attendanceHeatmap, setAttendanceHeatmap] = useState<EmployeeAttendanceHeatmapEntry[]>([]);
   const [leaveUtilization, setLeaveUtilization] = useState<EmployeeLeaveUtilizationEntry[]>([]);
   const [workforce, setWorkforce] = useState<WorkforceDistribution | null>(null);
+  // §Task — admin task stats (independent query so a slow task stat call
+  // doesn't gate the rest of the dashboard).
+  const taskStatsQuery = useQuery({
+    queryKey: qk.tasks.stats(),
+    queryFn: getAdminTaskStats,
+    staleTime: 60_000,
+  });
+  const taskStats: AdminTaskStats | undefined = taskStatsQuery.data;
   const [liveMetrics, setLiveMetrics] = useState<LiveMetrics | null>(null);
 
   // ── Fetch all data — wrapped in TanStack Query for caching/background refetch ──
@@ -1675,6 +1685,106 @@ export default function AnalyticsPage() {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── §Task — Tasks Overview ── */}
+      {taskStats && taskStats.total > 0 && (
+        <div>
+          <h2 className="text-text-primary mb-3 flex items-center gap-2 text-base font-semibold">
+            <CheckSquare size={20} />
+            Tasks Overview
+          </h2>
+          <div className="mb-4 grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
+            <StatsCard label="Total Tasks" value={taskStats.total.toLocaleString()} icon={CheckSquare} />
+            <StatsCard
+              label="Awaiting Review"
+              value={taskStats.awaitingReview.toLocaleString()}
+              icon={Clock}
+            />
+            <StatsCard label="Pending" value={taskStats.pending.toLocaleString()} icon={Activity} />
+            <StatsCard
+              label="Accepted"
+              value={taskStats.accepted.toLocaleString()}
+              icon={TrendingUp}
+            />
+            <StatsCard
+              label="Overdue"
+              value={taskStats.overdue.toLocaleString()}
+              icon={AlertTriangle}
+            />
+            <StatsCard
+              label="Due Soon"
+              value={taskStats.dueSoon.toLocaleString()}
+              icon={CalendarRange}
+            />
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {/* Status breakdown */}
+            <CardShell
+              title="Assignment Status"
+              id="task-status"
+              fullScreenChart={fullScreenChart}
+              onToggleFullScreen={toggleFullScreen}
+            >
+              <ResponsiveContainer width="100%" height={240}>
+                <PieChart>
+                  <Pie
+                    data={[
+                      { name: "Pending", value: taskStats.pending },
+                      { name: "Awaiting Review", value: taskStats.awaitingReview },
+                      { name: "Accepted", value: taskStats.accepted },
+                      { name: "Rejected", value: taskStats.rejected },
+                    ].filter((d) => d.value > 0)}
+                    dataKey="value"
+                    nameKey="name"
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={50}
+                    outerRadius={90}
+                    paddingAngle={2}
+                  >
+                    {[0, 1, 2, 3].map((i) => (
+                      <Cell key={i} fill={CHART_COLORS[i]} />
+                    ))}
+                  </Pie>
+                  <RechartsTooltip contentStyle={TOOLTIP_STYLE} />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                </PieChart>
+              </ResponsiveContainer>
+            </CardShell>
+
+            {/* Priority distribution */}
+            <CardShell
+              title="Priority Distribution"
+              id="task-priority"
+              fullScreenChart={fullScreenChart}
+              onToggleFullScreen={toggleFullScreen}
+            >
+              <ResponsiveContainer width="100%" height={240}>
+                <BarChart
+                  data={[
+                    { name: "Low", count: taskStats.byPriority.LOW },
+                    { name: "Medium", count: taskStats.byPriority.MEDIUM },
+                    { name: "High", count: taskStats.byPriority.HIGH },
+                    { name: "Urgent", count: taskStats.byPriority.URGENT },
+                  ]}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border-default)" />
+                  <XAxis dataKey="name" stroke="var(--text-muted)" fontSize={11} />
+                  <YAxis stroke="var(--text-muted)" fontSize={11} allowDecimals={false} />
+                  <RechartsTooltip contentStyle={TOOLTIP_STYLE} />
+                  <Bar dataKey="count" radius={[4, 4, 0, 0]}>
+                    <Cell fill={CHART_COLORS[3]} />
+                    <Cell fill={CHART_COLORS[2]} />
+                    <Cell fill={CHART_COLORS[5]} />
+                    <Cell fill={CHART_COLORS[6]} />
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </CardShell>
+          </div>
         </div>
       )}
 

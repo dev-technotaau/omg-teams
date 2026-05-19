@@ -55,6 +55,7 @@ router.post("/signed-url", requireAuth, async (req: Request, res: Response) => {
       disposition: z.enum(["inline", "attachment"]).default("attachment"),
       fileName: z.string().max(255).optional(),
       resourceType: z.enum(["image", "raw"]).optional(),
+      backend: z.enum(["CLOUDINARY", "R2"]).optional(),
     })
     .parse(req.body);
 
@@ -64,6 +65,7 @@ router.post("/signed-url", requireAuth, async (req: Request, res: Response) => {
 
   const signedUrl = await getSignedDownloadUrl(storageKey, {
     contentDisposition,
+    backend: body.backend ?? null,
     resourceType: body.resourceType ?? (storageKey.includes("offer-letters") ? "raw" : "image"),
   });
 
@@ -84,6 +86,7 @@ router.post("/download-token", requireAuth, (req: Request, res: Response) => {
       storageKey: z.string().min(1),
       disposition: z.enum(["inline", "attachment"]).default("attachment"),
       fileName: z.string().max(255).optional(),
+      backend: z.enum(["CLOUDINARY", "R2"]).optional(),
     })
     .parse(req.body);
 
@@ -92,6 +95,7 @@ router.post("/download-token", requireAuth, (req: Request, res: Response) => {
   const token = generateDownloadToken(body.storageKey, req.user!.id, {
     disposition: body.disposition,
     ...(safeName !== null && safeName !== undefined && { fileName: safeName }),
+    ...(body.backend && { backend: body.backend }),
   });
 
   res.status(HttpStatus.OK).json({ token, expiresIn: env.SIGNED_URL_TTL });
@@ -114,7 +118,7 @@ router.get("/download/:token", async (req: Request, res: Response) => {
     );
   }
 
-  const { storageKey, userId, disposition, fileName } = payload;
+  const { storageKey, userId, disposition, fileName, backend } = payload;
 
   // Set headers
   const dispHeader = fileName ? `${disposition}; filename="${fileName}"` : disposition;
@@ -123,7 +127,7 @@ router.get("/download/:token", async (req: Request, res: Response) => {
   res.setHeader("Cache-Control", "private, no-store");
 
   // Stream from storage
-  await streamFileToResponse(storageKey, res);
+  await streamFileToResponse(storageKey, res, backend);
 
   // Audit log
   await logFileAccess(userId, storageKey, "token-download");
@@ -131,10 +135,19 @@ router.get("/download/:token", async (req: Request, res: Response) => {
 
 /**
  * Stream a file from R2 or fetch from Cloudinary and pipe to response.
+ *
+ * `backend` is the explicit hint carried in the download token (or null
+ * for legacy tokens issued before the column existed). When null, fall
+ * back to the configured-default heuristic.
  */
-async function streamFileToResponse(storageKey: string, res: Response): Promise<void> {
+async function streamFileToResponse(
+  storageKey: string,
+  res: Response,
+  backend?: "CLOUDINARY" | "R2",
+): Promise<void> {
   const isCloudinary =
-    env.hasCloudinary && storageKey.includes("/") && !storageKey.startsWith("http");
+    backend === "CLOUDINARY" ||
+    (!backend && env.hasCloudinary && !storageKey.startsWith("http"));
 
   if (isCloudinary) {
     // For Cloudinary, generate a short-lived signed URL and redirect

@@ -3,6 +3,7 @@ import { ForbiddenError } from "../exceptions/forbidden-error.js";
 import { ValidationError } from "../exceptions/validation-error.js";
 import { generateBackupCodes, getBackupCodeStatus } from "../services/backup-code.service.js";
 import { validatePasswordComplexity } from "../services/password.service.js";
+import { getUserPerformance } from "../services/user-performance.service.js";
 import {
   createUser,
   getUserById,
@@ -246,4 +247,15 @@ export async function handleGetEmployeePassword(req: Request, res: Response): Pr
     req.params["id"] as string,
   );
   res.status(200).json({ password });
+}
+
+/**
+ * GET /api/v1/users/:id/performance?period=thisMonth
+ * Performance bundle for the Admin → Employee Detail → Performance tab.
+ * §6.4 — KPIs, pipeline, zones, trend, attendance, leave, targets, rank.
+ */
+export async function handleGetUserPerformance(req: Request, res: Response): Promise<void> {
+  const period = (req.query["period"] as string) ?? "thisMonth";
+  const data = await getUserPerformance(req.params["id"] as string, period);
+  res.status(200).json({ data });
 }

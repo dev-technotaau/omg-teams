@@ -1,10 +1,10 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import { PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import { PutObjectCommand } from "@aws-sdk/client-s3";
 import { v2 as cloudinaryV2 } from "cloudinary";
 import { getPrisma } from "../config/database.js";
 import { env } from "../config/env.js";
-import { getR2 } from "../config/storage.js";
+import { deleteStorageObjects, getR2 } from "../config/storage.js";
 import { ErrorCode } from "../constants/error-codes.js";
 import { HttpStatus } from "../constants/http-status.js";
 import { AppError } from "../exceptions/app-error.js";
@@ -132,6 +132,7 @@ export async function uploadProfilePhoto(req: Request, res: Response): Promise<v
 
   let storageKey: string;
   const target = resolveStorage();
+  const storageBackend = target === "r2" ? "R2" : "CLOUDINARY";
 
   if (target === "r2") {
     storageKey = `avatars/${targetUserId}/${timestamp}.${ext}`;
@@ -148,40 +149,21 @@ export async function uploadProfilePhoto(req: Request, res: Response): Promise<v
 
   // Generate a signed URL for immediate use (short-lived)
   const { getSignedDownloadUrl } = await import("../utils/signed-url.js");
-  const signedUrl = await getSignedDownloadUrl(storageKey);
+  const signedUrl = await getSignedDownloadUrl(storageKey, { backend: storageBackend });
 
   await prisma.user.update({
     where: { id: targetUserId },
     data: {
       profilePhotoUrl: signedUrl,
       profilePhotoStorageKey: storageKey,
+      profilePhotoStorageBackend: storageBackend,
     },
   });
 
-  // Delete old photo from storage (§30.3.1)
+  // Delete old photo from storage (§30.3.1) — tries both backends so it
+  // works regardless of which backend stored the previous file.
   if (oldStorageKey && oldStorageKey !== storageKey) {
-    try {
-      if (env.hasCloudinary && oldStorageKey.includes("/")) {
-        await cloudinaryV2.uploader.destroy(oldStorageKey);
-        logger.info("Old profile photo deleted from Cloudinary", {
-          userId: targetUserId,
-          oldKey: oldStorageKey,
-        });
-      } else if (env.hasR2) {
-        const r2 = getR2();
-        await r2.send(new DeleteObjectCommand({ Bucket: env.R2_BUCKET, Key: oldStorageKey }));
-        logger.info("Old profile photo deleted from R2", {
-          userId: targetUserId,
-          oldKey: oldStorageKey,
-        });
-      }
-    } catch (err) {
-      logger.warn("Failed to delete old profile photo from storage", {
-        userId: targetUserId,
-        oldKey: oldStorageKey,
-        err,
-      });
-    }
+    await deleteStorageObjects([oldStorageKey]);
   }
 
   res.status(HttpStatus.OK).json({
@@ -228,6 +210,7 @@ export async function uploadDocument(req: Request, res: Response): Promise<void>
 
   let storageKey: string;
   const target = resolveStorage();
+  const storageBackend = target === "r2" ? "R2" : "CLOUDINARY";
 
   if (target === "r2") {
     storageKey = `documents/${userId}/${timestamp}-${hash}.${ext}`;
@@ -239,15 +222,18 @@ export async function uploadDocument(req: Request, res: Response): Promise<void>
     logger.info("Document uploaded to Cloudinary", { userId, publicId: storageKey });
   }
 
-  // Return storageKey — frontend uses /files/signed-url to get access
+  // Return storageKey + backend — frontend forwards both to the document
+  // service so the EmployeeDocument row stores the explicit backend.
   const { getSignedDownloadUrl } = await import("../utils/signed-url.js");
   const signedUrl = await getSignedDownloadUrl(storageKey, {
+    backend: storageBackend,
     resourceType: file.mimetype.startsWith("image/") ? "image" : "raw",
   });
 
   res.status(HttpStatus.OK).json({
     url: signedUrl,
     storageKey,
+    storageBackend,
     originalName: file.originalname,
     size: file.size,
     mimeType: file.mimetype,
@@ -293,6 +279,7 @@ export async function uploadSignatureImage(req: Request, res: Response): Promise
 
   let storageKey: string;
   const target = resolveStorage();
+  const storageBackend = target === "r2" ? "R2" : "CLOUDINARY";
 
   if (target === "r2") {
     storageKey = `signatures/offer-letter-${Date.now()}.${extFromMime(file.mimetype)}`;
@@ -302,28 +289,27 @@ export async function uploadSignatureImage(req: Request, res: Response): Promise
     storageKey = result.publicId;
   }
 
-  // Clean up old file
+  // Clean up old file — tries both backends so it works regardless of which
+  // backend stored the previous signature.
   if (oldKey && oldKey !== storageKey) {
-    try {
-      if (env.hasCloudinary && oldKey.includes("/")) {
-        await cloudinaryV2.uploader.destroy(oldKey);
-      } else if (env.hasR2) {
-        const r2 = getR2();
-        await r2.send(new DeleteObjectCommand({ Bucket: env.R2_BUCKET, Key: oldKey }));
-      }
-    } catch (err) {
-      logger.warn("Failed to delete old signature image", { oldKey, err });
-    }
+    await deleteStorageObjects([oldKey]);
   }
 
   // Generate signed URL for the response and for PDF embedding
   const { getSignedDownloadUrl } = await import("../utils/signed-url.js");
-  const signedUrl = await getSignedDownloadUrl(storageKey);
+  const signedUrl = await getSignedDownloadUrl(storageKey, { backend: storageBackend });
 
-  // Store storage key (NOT raw URL) in PlatformSettings
+  // Store storage key + backend (NOT raw URL) in PlatformSettings so the
+  // PDF service can regenerate signed URLs without guessing the backend.
   const userId = req.user!.id;
   await updateSetting("offer_letter_signature_url", signedUrl, userId, "offer_letter");
   await updateSetting("offer_letter_signature_storage_key", storageKey, userId, "offer_letter");
+  await updateSetting(
+    "offer_letter_signature_storage_backend",
+    storageBackend,
+    userId,
+    "offer_letter",
+  );
 
   logger.info("Signature image uploaded", { storageKey });
   res
@@ -348,24 +334,14 @@ export async function deleteSignatureImage(_req: Request, res: Response): Promis
     );
   }
 
-  // Delete from storage
-  try {
-    if (env.hasCloudinary && storageKey.includes("/")) {
-      await cloudinaryV2.uploader.destroy(storageKey);
-    } else if (env.hasR2) {
-      const r2 = getR2();
-      await r2.send(new DeleteObjectCommand({ Bucket: env.R2_BUCKET, Key: storageKey }));
-    }
-  } catch (err) {
-    logger.warn("Failed to delete signature image from storage, clearing settings anyway", {
-      storageKey,
-      err,
-    });
-  }
+  // Delete from storage — tries both backends. Settings are cleared even if
+  // the underlying file is already gone, so the admin UI returns to a clean state.
+  await deleteStorageObjects([storageKey]);
 
   const userId = _req.user!.id;
   await updateSetting("offer_letter_signature_url", null, userId, "offer_letter");
   await updateSetting("offer_letter_signature_storage_key", null, userId, "offer_letter");
+  await updateSetting("offer_letter_signature_storage_backend", null, userId, "offer_letter");
 
   logger.info("Signature image deleted", { storageKey });
   res.status(HttpStatus.OK).json({ message: "Signature image removed" });
@@ -403,24 +379,11 @@ export async function deleteProfilePhoto(req: Request, res: Response): Promise<v
     );
   }
 
-  // Attempt to delete from storage
-  try {
-    if (env.hasR2) {
-      const r2 = getR2();
-      await r2.send(
-        new DeleteObjectCommand({ Bucket: env.R2_BUCKET, Key: user.profilePhotoStorageKey }),
-      );
-      logger.info("Profile photo deleted from R2", { userId, key: user.profilePhotoStorageKey });
-    } else if (env.hasCloudinary) {
-      await cloudinaryV2.uploader.destroy(user.profilePhotoStorageKey);
-      logger.info("Profile photo deleted from Cloudinary", {
-        userId,
-        publicId: user.profilePhotoStorageKey,
-      });
-    }
-  } catch (err) {
-    logger.warn("Failed to delete profile photo from storage, clearing DB anyway", { userId, err });
-  }
+  // Attempt deletion from both backends. The previous code checked R2 first
+  // even though uploads prefer Cloudinary — when both were configured this
+  // tried R2 (key not found), never reached Cloudinary, and leaked the file.
+  await deleteStorageObjects([user.profilePhotoStorageKey]);
+  logger.info("Profile photo delete requested", { userId, key: user.profilePhotoStorageKey });
 
   await prisma.user.update({
     where: { id: userId },

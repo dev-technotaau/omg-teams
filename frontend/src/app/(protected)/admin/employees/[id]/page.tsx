@@ -23,6 +23,7 @@ import {
   GODVIEW_TAB_IDS,
   type GodviewTabId,
 } from "./godview-tabs";
+import { EmployeePerformancePanel } from "./performance-panel";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { useQuery } from "@tanstack/react-query";
@@ -59,7 +60,7 @@ import {
   removeManager as removeManagerApi,
 } from "@/services/user.service";
 import type { Column } from "@/components/ui";
-import { useTabSearchParam } from "@/hooks";
+import { useTabSearchParam, useClickOutside } from "@/hooks";
 
 // ──────────────────────────────────────────────
 //  Employee Detail — Spec Section 6.4
@@ -124,11 +125,11 @@ interface DocRecord {
 interface CandidateRecord {
   id: string;
   globalSerialNumber: number;
-  candidateName: string;
-  contactNumber: string;
+  candidateName: string | null;
+  contactNo: string | null;
   zone: string;
-  currentStage: string;
-  status: string;
+  candidateStage: string | null;
+  status: string | null;
   createdAt: string;
 }
 
@@ -401,7 +402,21 @@ export default function EmployeeDetailPage() {
   }, [presenceQuery.data]);
 
   const [actionsOpen, setActionsOpen] = useState(false);
-  const closeActions = () => setActionsOpen(false);
+  const closeActions = useCallback(() => setActionsOpen(false), []);
+  // §Godview — close the actions dropdown on outside click or Escape.
+  // The ref wraps both the toggle button AND the dropdown panel so a
+  // click on the toggle isn't treated as "outside" and immediately
+  // reopened.
+  const actionsRef = useRef<HTMLDivElement>(null);
+  useClickOutside(actionsRef, closeActions);
+  useEffect(() => {
+    if (!actionsOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeActions();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [actionsOpen, closeActions]);
   const refreshEmployee = async () => {
     try {
       const res = await api.get<{ user: EmployeeDetail }>(`/users/${employeeId}`);
@@ -747,8 +762,8 @@ export default function EmployeeDetailPage() {
 
   const reportCols: Column<CandidateRecord>[] = [
     { key: "gsn", header: "#", cell: (r) => r.globalSerialNumber },
-    { key: "name", header: "Candidate", cell: (r) => r.candidateName },
-    { key: "contact", header: "Contact", cell: (r) => r.contactNumber },
+    { key: "name", header: "Candidate", cell: (r) => r.candidateName ?? "—" },
+    { key: "contact", header: "Contact", cell: (r) => r.contactNo ?? "—" },
     {
       key: "zone",
       header: "Zone",
@@ -761,20 +776,29 @@ export default function EmployeeDetailPage() {
     {
       key: "stage",
       header: "Stage",
-      cell: (r) => (
-        <Badge variant="primary" size="sm">
-          {r.currentStage.replace("_", " ")}
-        </Badge>
-      ),
+      cell: (r) =>
+        r.candidateStage ? (
+          <Badge variant="primary" size="sm">
+            {r.candidateStage.replace(/_/g, " ")}
+          </Badge>
+        ) : (
+          "—"
+        ),
     },
     {
       key: "status",
       header: "Status",
-      cell: (r) => (
-        <Badge variant={r.status === "COMPLETE" ? "success" : "warning"} size="sm">
-          {r.status}
-        </Badge>
-      ),
+      cell: (r) =>
+        r.status ? (
+          <Badge
+            variant={r.status.toUpperCase() === "COMPLETE" ? "success" : "warning"}
+            size="sm"
+          >
+            {r.status}
+          </Badge>
+        ) : (
+          "—"
+        ),
     },
     { key: "date", header: "Date", cell: (r) => new Date(r.createdAt).toLocaleDateString("en-IN") },
   ];
@@ -793,7 +817,7 @@ export default function EmployeeDetailPage() {
               Back
             </Button>
             {/* §Godview — consolidated admin actions */}
-            <div className="relative">
+            <div className="relative" ref={actionsRef}>
               <Button
                 variant="outline"
                 leftIcon={MoreVertical}
@@ -804,7 +828,6 @@ export default function EmployeeDetailPage() {
               {actionsOpen && (
                 <div
                   className="border-border-default bg-bg-surface-raised absolute right-0 z-20 mt-2 w-64 divide-y divide-border-default rounded-lg border shadow-xl"
-                  onMouseLeave={() => setActionsOpen(false)}
                 >
                   <div>
                     <button
@@ -1351,17 +1374,7 @@ export default function EmployeeDetailPage() {
       </Modal>
 
       {activeTab === "performance" && (
-        <Card>
-          <Card.Header>
-            <h3 className="text-text-secondary text-sm font-medium">Performance Overview</h3>
-          </Card.Header>
-          <Card.Body>
-            <p className="text-text-muted text-sm">
-              Performance metrics are calculated from candidate reports, attendance, and target
-              data. Switch to the Reports, Attendance, or Leave tabs for detailed views.
-            </p>
-          </Card.Body>
-        </Card>
+        <EmployeePerformancePanel employeeId={employeeId} />
       )}
 
       {activeTab === "attendance" &&

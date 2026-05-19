@@ -35,6 +35,9 @@ export const ROUTES = {
   // Targets — recruiter view
   MY_TARGETS: "/my-targets",
 
+  // Tasks — recruiter/RM view (admin-assigned tasks they need to complete)
+  MY_TASKS: "/my-tasks",
+
   // RM views
   MY_RECRUITERS: "/my-recruiters",
   MY_RECRUITER_DETAIL: (id: string) => `/my-recruiters/${id}`,
@@ -54,6 +57,7 @@ export const ROUTES = {
   ADMIN_ATTENDANCE: "/admin/attendance",
   ADMIN_LEAVES: "/admin/leaves",
   ADMIN_TARGETS: "/admin/targets",
+  ADMIN_TASKS: "/admin/tasks",
   ADMIN_COMPANIES: "/admin/companies",
   ADMIN_DOCUMENTS: "/admin/documents",
   ADMIN_DOCUMENT_TYPES: "/admin/document-types",

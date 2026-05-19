@@ -171,8 +171,10 @@ export default function ProfilePage() {
       await uploadPhoto(file);
       if (refresh) await refresh();
       toast.success("Profile photo updated");
-    } catch {
-      toast.error("Failed to upload photo");
+    } catch (err) {
+      const { extractApiError } = await import("@/lib/api");
+      const apiErr = extractApiError(err);
+      toast.error(apiErr.message || "Failed to upload photo");
     }
   };
 

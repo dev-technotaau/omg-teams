@@ -40,6 +40,7 @@ import {
   handleGetBackupCodeStatus,
   handleGetEmployeePassword,
   handleGetTeamMember,
+  handleGetUserPerformance,
 } from "../controllers/user.controller.js";
 import { requireAuth, requireAdmin } from "../middleware/auth.js";
 
@@ -74,6 +75,7 @@ router.post("/:id/unlock", handleUnlockAccount);
 router.post("/:id/backup-codes", handleGenerateBackupCodes);
 router.get("/:id/backup-codes/status", handleGetBackupCodeStatus);
 router.post("/:id/password", handleGetEmployeePassword);
+router.get("/:id/performance", handleGetUserPerformance);
 
 // ── §Godview — per-user administrative data ─────────────────────
 router.get("/:id/godview-summary", handleGetGodviewSummary);

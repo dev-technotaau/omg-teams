@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { onForegroundMessage } from "@/lib/firebase";
 import { useSocket } from "@/hooks/use-socket";
+import { useNotificationSound } from "@/hooks/use-notification-sound";
 import {
   useAppDispatch,
   setUnreadCount,
@@ -45,6 +46,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const dispatch = useAppDispatch();
   const [recent, setRecent] = useState<NotificationData[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  // §11.5 — Sound chime gated by user's per-category preference. The hook
+  // skips silently when the category has soundEnabled=false (or the master
+  // in-app toggle is off), so callers can fire-and-forget play(type).
+  const { play: playSound } = useNotificationSound();
 
   // ── Source 1: REST polling (authoritative count) ──
   const syncUnreadCount = useCallback(async () => {
@@ -143,8 +148,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         setRecent((prev) => [data, ...prev].slice(0, 20));
         dispatch(incrementUnreadCount());
         toast.info(data.title, { description: data.message });
+        // §11.5 — chime gated by per-category soundEnabled
+        playSound(data.type);
       },
-      [dispatch],
+      [dispatch, playSound],
     ),
   );
 
@@ -178,12 +185,19 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
       // Refresh recent notifications to stay in sync
       void fetchRecent();
+
+      // §11.5 — chime gated by per-category soundEnabled. FCM payloads
+      // carry the category in payload.data.type (we set this server-side
+      // when enqueueing the push); fall back to GENERAL if absent so we
+      // still ring on payloads we don't recognise.
+      const category = (payload.data?.type as string | undefined) ?? "GENERAL";
+      playSound(category);
     });
 
     return () => {
       unsub?.();
     };
-  }, [fetchRecent, dispatch, syncUnreadCount]);
+  }, [fetchRecent, dispatch, syncUnreadCount, playSound]);
 
   return (
     <NotificationContext.Provider

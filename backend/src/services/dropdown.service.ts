@@ -70,6 +70,34 @@ export async function createDropdownOption(data: {
   sortOrder?: number | undefined;
 }) {
   const prisma = getPrisma();
+
+  // Idempotent backfill: if a row already exists with the same (category,
+  // value, parentId) — either active or inactive — return it instead of
+  // crashing on the unique-constraint violation. Inactive rows are flipped
+  // back to active so the option reappears in dropdowns. This makes the
+  // form's "+ Add" affordance safe to spam without 500s.
+  const normalizedValue = data.value.trim().toLowerCase();
+  const existing = await prisma.dropdownOption.findFirst({
+    where: {
+      category: data.category,
+      value: normalizedValue,
+      // For locations, scope existence check to the same parent state so two
+      // different states can have a same-named location (e.g. "central").
+      ...(data.category === "LOCATION" ? { parentId: data.parentId ?? null } : {}),
+    },
+  });
+  if (existing) {
+    if (!existing.isActive) {
+      const reactivated = await prisma.dropdownOption.update({
+        where: { id: existing.id },
+        data: { isActive: true },
+      });
+      await cache.delPattern(`dropdown:list:${data.category}*`);
+      return reactivated;
+    }
+    return existing;
+  }
+
   // Auto-assign sortOrder to end of list when not explicitly provided
   let sortOrder = data.sortOrder;
   if (sortOrder === undefined) {
@@ -83,8 +111,8 @@ export async function createDropdownOption(data: {
   const result = await prisma.dropdownOption.create({
     data: {
       category: data.category,
-      value: data.value,
-      label: data.label,
+      value: normalizedValue,
+      label: data.label.trim(),
       zone: data.zone ?? null,
       parentId: data.parentId ?? null,
       sortOrder,

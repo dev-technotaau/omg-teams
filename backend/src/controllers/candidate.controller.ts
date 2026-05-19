@@ -172,13 +172,16 @@ export async function handleListCandidates(req: Request, res: Response): Promise
     limit: q["limit"] ? parseInt(q["limit"] as string, 10) : undefined,
   };
 
-  // Scope by role — recruiters see only their own, RMs see their team
+  // Scope by role — recruiters see only their own, RMs see their team.
+  // Admins may optionally narrow to a specific recruiter via ?recruiterId=
+  // (used by the Admin → Employee Detail → Reports tab).
   if (req.user!.role === "RECRUITER") {
     filters.recruiterId = req.user!.id;
   } else if (req.user!.role === "REPORTING_MANAGER") {
     filters.recruiterIds = await getTeamRecruiterIds(req.user!.id);
+  } else if (req.user!.role === "ADMIN" && typeof q["recruiterId"] === "string") {
+    filters.recruiterId = q["recruiterId"];
   }
-  // ADMIN: no filter — sees all
 
   const result = await candidateSvc.listCandidateReports(filters);
 

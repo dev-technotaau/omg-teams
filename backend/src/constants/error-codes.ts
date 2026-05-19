@@ -39,6 +39,8 @@ export const ErrorCode = {
   // ── Targets (§23.9) ──
   TARGET_OVERLAP: "TARGET_OVERLAP",
   TARGET_NOT_FOUND: "TARGET_NOT_FOUND",
+  /** effectiveFrom can only be edited while target is SCHEDULED. */
+  TARGET_ALREADY_STARTED: "TARGET_ALREADY_STARTED",
 
   // ── Resources ──
   NOT_FOUND: "NOT_FOUND",

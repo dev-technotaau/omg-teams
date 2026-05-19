@@ -212,6 +212,24 @@ export default function TeamTargetsPage() {
                                 size="sm"
                                 className="mt-2"
                               />
+                              {/* Ending-soon hint so the RM can see which
+                                  recruiter targets are about to roll over. */}
+                              {t.daysUntilEnd != null &&
+                                t.daysUntilEnd >= 0 &&
+                                t.daysUntilEnd <= 7 && (
+                                  <p
+                                    className={cn(
+                                      "mt-2 text-[10px] font-medium",
+                                      t.daysUntilEnd === 0
+                                        ? "text-error-500"
+                                        : "text-warning-500",
+                                    )}
+                                  >
+                                    {t.daysUntilEnd === 0
+                                      ? "Ends today"
+                                      : `Ends in ${t.daysUntilEnd}d`}
+                                  </p>
+                                )}
                               {t.recruiterId === null && (
                                 <p className="text-text-muted mt-2 text-[10px] uppercase tracking-wide">
                                   Global default

@@ -119,6 +119,22 @@ export const qk = {
       [...qk.targets.lists(), filters ?? {}] as const,
   },
 
+  // ── Tasks (§Task) ──
+  tasks: {
+    all: () => ["tasks"] as const,
+    lists: () => [...qk.tasks.all(), "list"] as const,
+    list: (filters?: Record<string, unknown>) =>
+      [...qk.tasks.lists(), filters ?? {}] as const,
+    details: () => [...qk.tasks.all(), "detail"] as const,
+    detail: (id: string) => [...qk.tasks.details(), id] as const,
+    stats: () => [...qk.tasks.all(), "stats"] as const,
+    myList: (filters?: Record<string, unknown>) =>
+      [...qk.tasks.all(), "me", "list", filters ?? {}] as const,
+    myOpenCount: () => [...qk.tasks.all(), "me", "openCount"] as const,
+    history: (id: string) => [...qk.tasks.all(), "history", id] as const,
+    userMetrics: (userId: string) => [...qk.tasks.all(), "userMetrics", userId] as const,
+  },
+
   // ── Documents (§6) ──
   documents: {
     all: () => ["documents"] as const,
@@ -234,6 +250,7 @@ export const qk = {
   notifPrefs: {
     all: () => ["notif-prefs"] as const,
     detail: () => [...qk.notifPrefs.all(), "detail"] as const,
+    quietHours: () => [...qk.notifPrefs.all(), "quiet-hours"] as const,
   },
   reportsManagement: {
     all: () => ["reports-management"] as const,
@@ -244,5 +261,9 @@ export const qk = {
     history: (filters?: Record<string, unknown>) =>
       [...qk.reportsManagement.all(), "history", filters ?? {}] as const,
     filterData: () => [...qk.reportsManagement.all(), "filter-data"] as const,
+    columns: (reportType?: string) =>
+      [...qk.reportsManagement.all(), "columns", reportType ?? "all"] as const,
+    templates: (reportType?: string) =>
+      [...qk.reportsManagement.all(), "templates", reportType ?? "all"] as const,
   },
 } as const;

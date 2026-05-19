@@ -1,7 +1,16 @@
 import { type DropdownCategory } from "@prisma/client";
 import { z } from "zod";
 import * as dropdownSvc from "../services/dropdown.service.js";
+import { ForbiddenError } from "../exceptions/forbidden-error.js";
 import type { Request, Response } from "express";
+
+// ─────────────────────────────────────────────────────────────
+//  Categories any authenticated user is allowed to backfill
+//  from the candidate report form. Everything else stays
+//  admin-only (states + Set-A qualifications etc. are bounded
+//  domains the admin curates).
+// ─────────────────────────────────────────────────────────────
+const USER_BACKFILLABLE: Set<DropdownCategory> = new Set(["LOCATION", "PROFILE"]);
 
 // ──────────────────────────────────────────────
 //  Dropdown Options Controller (Admin Master Data)
@@ -124,6 +133,22 @@ export async function handleCreateDropdownOption(req: Request, res: Response): P
     .parse(req.body);
 
   const category = resolveCategory(body.fieldKey ?? body.category);
+
+  // Role gating: admins can create any category; everyone else is limited
+  // to backfillable categories (LOCATION, PROFILE) used by the candidate
+  // report form. LOCATION additionally requires a parentId so the new row
+  // is correctly scoped under a state.
+  const isAdmin = req.user?.role === "ADMIN";
+  if (!isAdmin) {
+    if (!USER_BACKFILLABLE.has(category)) {
+      throw new ForbiddenError(
+        "Only administrators can create options for this category",
+      );
+    }
+    if (category === "LOCATION" && !body.parentId) {
+      throw new ForbiddenError("A state must be selected before adding a location");
+    }
+  }
 
   const option = await dropdownSvc.createDropdownOption({
     category,

@@ -10,6 +10,38 @@ import { logger } from "../instrument.js";
 type TargetType = "DAILY" | "WEEKLY" | "MONTHLY";
 
 /**
+ * Derived target status — combines the raw `isActive` boolean with the
+ * effective-date window. A target that's `isActive=true` is *not*
+ * automatically operational: it may be SCHEDULED (start date in the future)
+ * or EXPIRED (end date in the past). Admins need to see the real state,
+ * not just the DB flag.
+ */
+export type EffectiveStatus = "ACTIVE" | "SCHEDULED" | "EXPIRED" | "INACTIVE";
+
+export function deriveEffectiveStatus(
+  isActive: boolean,
+  effectiveFrom: Date,
+  effectiveTo: Date | null,
+  now: Date = new Date(),
+): EffectiveStatus {
+  if (!isActive) return "INACTIVE";
+  if (effectiveFrom > now) return "SCHEDULED";
+  if (effectiveTo !== null && effectiveTo < now) return "EXPIRED";
+  return "ACTIVE";
+}
+
+/**
+ * Days until/since a boundary (positive = future, negative = past).
+ * Returns null if the boundary is undefined (e.g. ongoing target).
+ */
+export function daysFromNow(boundary: Date | null, now: Date = new Date()): number | null {
+  if (!boundary) return null;
+  const ms = boundary.getTime() - now.getTime();
+  // Round up so "ends in 0.4 days" still shows as "1 day left" to the admin
+  return Math.ceil(ms / (1000 * 60 * 60 * 24));
+}
+
+/**
  * §23.9 — Period start for a given target type.
  *
  * - DAILY:   today at 00:00 local
@@ -65,10 +97,23 @@ const GLOBAL_DEFAULT_ACHIEVED = 0;
 
 /**
  * Admin list — returns every target row (filtered) WITH the
- * `achieved` count computed in the same period the target type
- * uses. Used by the admin Targets page.
+ * `achieved` count, the derived `effectiveStatus`, and a
+ * `daysUntilStart` / `daysUntilEnd` hint for the time-context UI.
+ *
+ * Filters:
+ *   - recruiterId: scope to one recruiter (or null = global defaults only)
+ *   - isActive: raw DB flag filter (kept for backward compat)
+ *   - effectiveStatus: derived status filter (ACTIVE/SCHEDULED/EXPIRED/INACTIVE)
+ *     — applied in-memory after fetch because it depends on `now`
+ *   - endingWithinDays: only rows with effectiveTo within this many days
+ *     from now (positive only — does not include already-expired)
  */
-export async function listTargets(filters?: { recruiterId?: string; isActive?: boolean }) {
+export async function listTargets(filters?: {
+  recruiterId?: string;
+  isActive?: boolean;
+  effectiveStatus?: EffectiveStatus;
+  endingWithinDays?: number;
+}) {
   const prisma = getPrisma();
   const where: Record<string, unknown> = {};
   if (filters?.recruiterId) where["recruiterId"] = filters.recruiterId;
@@ -83,19 +128,122 @@ export async function listTargets(filters?: { recruiterId?: string; isActive?: b
     },
   });
 
-  // Compute achievement for each row in parallel. For per-recruiter
-  // targets we count their own reports; for global defaults
-  // (recruiterId=null) we leave it at 0 (see helper above).
-  const withAchievement = await Promise.all(
+  const now = new Date();
+
+  // Compute achievement + derived status for each row in parallel.
+  const enriched = await Promise.all(
     rows.map(async (t) => {
       const achieved = t.recruiterId
         ? await getTargetAchievement(t.recruiterId, t.targetType as TargetType)
         : GLOBAL_DEFAULT_ACHIEVED;
-      return { ...t, achieved };
+      const effectiveStatus = deriveEffectiveStatus(t.isActive, t.effectiveFrom, t.effectiveTo, now);
+      return {
+        ...t,
+        achieved,
+        effectiveStatus,
+        daysUntilStart: daysFromNow(t.effectiveFrom, now), // negative if already started
+        daysUntilEnd: daysFromNow(t.effectiveTo, now), // null if ongoing, negative if past
+      };
     }),
   );
 
-  return withAchievement;
+  // §23.9 — Override-relationship metadata. Two annotations:
+  //
+  //   overridesGlobalValue → on individual rows that currently shadow a
+  //                          global default of the same type
+  //   suppressedByRecruiterCount → on global default rows, how many
+  //                                ACTIVE individuals are currently
+  //                                using their own value instead
+  //
+  // Only ACTIVE rows on both sides contribute — a scheduled/expired
+  // individual doesn't suppress an active global, and vice versa.
+  //
+  // The compute needs the full ACTIVE set of globals + individuals, but
+  // user filters (recruiterId, status) may have narrowed `enriched`.
+  // We side-fetch the missing slice so the hint works correctly even
+  // when the admin filters to one recruiter or to SCHEDULED only.
+  const activeGlobalsByType = new Map<TargetType, { id: string; targetValue: number }>();
+  const activeIndividualCountByType = new Map<TargetType, number>();
+  const seedFromList = (
+    rs: { recruiterId: string | null; targetType: string; targetValue: number; id: string; effectiveStatus?: EffectiveStatus }[],
+  ) => {
+    for (const t of rs) {
+      if (t.effectiveStatus !== "ACTIVE") continue;
+      const type = t.targetType as TargetType;
+      if (t.recruiterId === null) {
+        activeGlobalsByType.set(type, { id: t.id, targetValue: t.targetValue });
+      } else {
+        activeIndividualCountByType.set(type, (activeIndividualCountByType.get(type) ?? 0) + 1);
+      }
+    }
+  };
+  seedFromList(enriched);
+
+  // If filters narrowed the set, query the missing pieces. We only need
+  // the bare minimum (id, type, value, isActive, dates) — no relations.
+  const needGlobals =
+    !activeGlobalsByType.size &&
+    (filters?.recruiterId !== undefined || filters?.effectiveStatus !== undefined);
+  const needIndividuals =
+    !activeIndividualCountByType.size &&
+    (filters?.recruiterId === undefined ? false : filters.recruiterId !== "");
+  if (needGlobals || needIndividuals) {
+    const extraRows = await prisma.recruiterTarget.findMany({
+      where: {
+        isActive: true,
+        effectiveFrom: { lte: now },
+        OR: [{ effectiveTo: null }, { effectiveTo: { gte: now } }],
+        ...(needGlobals && !needIndividuals ? { recruiterId: null } : {}),
+        ...(needIndividuals && !needGlobals ? { NOT: { recruiterId: null } } : {}),
+      },
+      select: {
+        id: true,
+        recruiterId: true,
+        targetType: true,
+        targetValue: true,
+      },
+    });
+    seedFromList(
+      extraRows.map((r) => ({ ...r, effectiveStatus: "ACTIVE" as EffectiveStatus })),
+    );
+  }
+  const enrichedWithOverrides = enriched.map((t) => {
+    const type = t.targetType as TargetType;
+    if (t.recruiterId === null) {
+      // Global default — annotate with how many individuals shadow it
+      return {
+        ...t,
+        overridesGlobalValue: null as number | null,
+        suppressedByRecruiterCount:
+          t.effectiveStatus === "ACTIVE"
+            ? (activeIndividualCountByType.get(type) ?? 0)
+            : 0,
+      };
+    }
+    // Individual — annotate with the global value it overrides (if any)
+    const matchingGlobal =
+      t.effectiveStatus === "ACTIVE" ? activeGlobalsByType.get(type) : undefined;
+    return {
+      ...t,
+      overridesGlobalValue: matchingGlobal?.targetValue ?? null,
+      suppressedByRecruiterCount: 0,
+    };
+  });
+
+  // In-memory filters for derived properties
+  let filtered = enrichedWithOverrides;
+  if (filters?.effectiveStatus) {
+    filtered = filtered.filter((t) => t.effectiveStatus === filters.effectiveStatus);
+  }
+  if (filters?.endingWithinDays !== undefined) {
+    const within = filters.endingWithinDays;
+    filtered = filtered.filter(
+      (t) =>
+        t.daysUntilEnd !== null && t.daysUntilEnd >= 0 && t.daysUntilEnd <= within,
+    );
+  }
+
+  return filtered;
 }
 
 /**
@@ -196,7 +344,12 @@ export async function createTarget(
 
 export async function updateTarget(
   id: string,
-  data: { targetValue?: number; effectiveTo?: string | null; isActive?: boolean },
+  data: {
+    targetValue?: number;
+    effectiveFrom?: string;
+    effectiveTo?: string | null;
+    isActive?: boolean;
+  },
 ) {
   const prisma = getPrisma();
 
@@ -207,6 +360,35 @@ export async function updateTarget(
 
   const updateData: Record<string, unknown> = {};
   if (data.targetValue !== undefined) updateData["targetValue"] = data.targetValue;
+
+  // §23.9 — Editing effectiveFrom is only allowed while the target is
+  // SCHEDULED (not yet started). Once it has started, the start date is
+  // historical and changing it would silently invalidate the achievement
+  // window calculations + dedup keys.
+  if (data.effectiveFrom !== undefined) {
+    const now = new Date();
+    if (existing.effectiveFrom <= now) {
+      throw new AppError(
+        "effectiveFrom can only be edited while the target is SCHEDULED (start date in the future).",
+        409,
+        "TARGET_ALREADY_STARTED",
+      );
+    }
+    const newFrom = new Date(data.effectiveFrom);
+    if (Number.isNaN(newFrom.getTime())) {
+      throw new AppError("Invalid effectiveFrom date", 400, "INVALID_DATE");
+    }
+    // Don't allow editing into the past either — keep SCHEDULED semantics.
+    if (newFrom <= now) {
+      throw new AppError(
+        "effectiveFrom must remain in the future for SCHEDULED targets.",
+        400,
+        "INVALID_DATE_RANGE",
+      );
+    }
+    updateData["effectiveFrom"] = newFrom;
+  }
+
   if (data.effectiveTo !== undefined) {
     if (data.effectiveTo === null || data.effectiveTo === "") {
       updateData["effectiveTo"] = null;
@@ -215,7 +397,10 @@ export async function updateTarget(
       if (Number.isNaN(toDate.getTime())) {
         throw new AppError("Invalid effectiveTo date", 400, "INVALID_DATE");
       }
-      if (toDate < existing.effectiveFrom) {
+      // Compare against the *new* effectiveFrom if we're also editing it.
+      const referenceFrom =
+        (updateData["effectiveFrom"] as Date | undefined) ?? existing.effectiveFrom;
+      if (toDate < referenceFrom) {
         throw new AppError(
           "effectiveTo must be on or after effectiveFrom",
           400,
@@ -227,22 +412,27 @@ export async function updateTarget(
   }
   if (data.isActive !== undefined) updateData["isActive"] = data.isActive;
 
-  // If we're extending the period, re-check overlaps with other rows
-  if (
-    data.effectiveTo !== undefined &&
-    updateData["effectiveTo"] !== existing.effectiveTo &&
-    existing.isActive
-  ) {
+  // Re-check overlap if either bound moved. This catches: shifting a
+  // SCHEDULED window onto an existing target, or extending effectiveTo
+  // into another active target's window.
+  const fromOrEndChanged =
+    updateData["effectiveFrom"] !== undefined || updateData["effectiveTo"] !== undefined;
+  if (fromOrEndChanged && existing.isActive) {
+    const newFrom = (updateData["effectiveFrom"] as Date | undefined) ?? existing.effectiveFrom;
+    const newTo =
+      "effectiveTo" in updateData
+        ? (updateData["effectiveTo"] as Date | null)
+        : existing.effectiveTo;
     const conflict = await findOverlappingTarget(
       existing.recruiterId,
       existing.targetType as TargetType,
-      existing.effectiveFrom,
-      (updateData["effectiveTo"] as Date | null) ?? null,
+      newFrom,
+      newTo,
       existing.id,
     );
     if (conflict) {
       throw new AppError(
-        `Extending this target would overlap with an existing active ${existing.targetType.toLowerCase()} target.`,
+        `This change would overlap with an existing active ${existing.targetType.toLowerCase()} target.`,
         409,
         "TARGET_OVERLAP",
       );
@@ -257,7 +447,7 @@ export async function updateTarget(
     void onTargetUpdated(updated.recruiterId, updated.targetType, updated.targetValue);
   }
 
-  return updated;
+  return { existing, updated };
 }
 
 export async function deleteTarget(id: string) {
@@ -322,15 +512,26 @@ export async function getDashboardTarget(recruiterId: string) {
 
 /**
  * §23.9 — Resolve all active targets for a recruiter and compute
- * their achievement counts. Used by /targets/recruiter/:id and the
- * recruiter "My Targets" page.
+ * their achievement counts. Used by /targets/recruiter/:id, /targets/me,
+ * /targets/team, and the recruiter / RM "My Targets" / "Team Targets" pages.
+ *
+ * Rows returned here are pre-filtered to currently-effective by
+ * getRecruiterActiveTargets, so `effectiveStatus` is always ACTIVE — but
+ * we still attach it (alongside `daysUntilEnd` / `daysUntilStart`) so the
+ * frontend can render "ends in 3d" subtext consistently with the admin
+ * Targets page. Without this, recruiters and RMs would see the same
+ * targets the admin sees, but without the time-context cues.
  */
 export async function getRecruiterTargetsWithAchievement(recruiterId: string) {
   const targets = await getRecruiterActiveTargets(recruiterId);
+  const now = new Date();
   return Promise.all(
     targets.map(async (t) => ({
       ...t,
       achieved: await getTargetAchievement(recruiterId, t.targetType as TargetType),
+      effectiveStatus: deriveEffectiveStatus(t.isActive, t.effectiveFrom, t.effectiveTo, now),
+      daysUntilStart: daysFromNow(t.effectiveFrom, now),
+      daysUntilEnd: daysFromNow(t.effectiveTo, now),
     })),
   );
 }

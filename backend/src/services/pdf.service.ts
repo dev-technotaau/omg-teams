@@ -57,13 +57,16 @@ async function getSignatoryConfig(): Promise<{
 }> {
   const { getSetting } = await import("./settings.service.js");
 
-  const [storageKeySetting, nameSetting, titleSetting] = await Promise.all([
+  const [storageKeySetting, backendSetting, nameSetting, titleSetting] = await Promise.all([
     getSetting("offer_letter_signature_storage_key"),
+    getSetting("offer_letter_signature_storage_backend"),
     getSetting("offer_letter_signatory_name"),
     getSetting("offer_letter_signatory_title"),
   ]);
 
   const storageKey = (storageKeySetting?.value as string) || null;
+  const rawBackend = backendSetting?.value as string | null | undefined;
+  const backend = rawBackend === "CLOUDINARY" || rawBackend === "R2" ? rawBackend : null;
   const name = (nameSetting?.value as string) || "Shalini Singh";
   const title = (titleSetting?.value as string) || "HR Manager";
 
@@ -72,7 +75,7 @@ async function getSignatoryConfig(): Promise<{
   if (storageKey) {
     try {
       const { getSignedDownloadUrl } = await import("../utils/signed-url.js");
-      imageUrl = await getSignedDownloadUrl(storageKey, { ttlSeconds: 60 });
+      imageUrl = await getSignedDownloadUrl(storageKey, { ttlSeconds: 60, backend });
     } catch {
       // Fall back to no image
     }
@@ -163,6 +166,7 @@ export async function generateAndStoreOfferLetterPdf(offerId: string): Promise<s
   const hash = crypto.createHash("sha256").update(pdfBuffer).digest("hex");
 
   let storageKey: string;
+  let storageBackend: "CLOUDINARY" | "R2";
 
   if (env.hasCloudinary) {
     // Upload to Cloudinary as raw PDF
@@ -189,6 +193,7 @@ export async function generateAndStoreOfferLetterPdf(offerId: string): Promise<s
     });
 
     storageKey = result.public_id;
+    storageBackend = "CLOUDINARY";
     logger.info("Offer letter PDF uploaded to Cloudinary (authenticated)", {
       offerId,
       publicId: storageKey,
@@ -197,6 +202,7 @@ export async function generateAndStoreOfferLetterPdf(offerId: string): Promise<s
   } else if (env.hasR2) {
     // Fallback to R2
     storageKey = `offer-letters/${offerLetter.user.id}/${offerLetter.referenceNumber}.pdf`;
+    storageBackend = "R2";
     const r2 = getR2();
 
     await r2.send(
@@ -225,15 +231,17 @@ export async function generateAndStoreOfferLetterPdf(offerId: string): Promise<s
   // Generate a signed URL for the response
   const { getSignedDownloadUrl } = await import("../utils/signed-url.js");
   const signedUrl = await getSignedDownloadUrl(storageKey, {
+    backend: storageBackend,
     contentDisposition: `attachment; filename="${offerLetter.referenceNumber}.pdf"`,
     resourceType: "raw",
   });
 
-  // Store the storageKey (for regenerating signed URLs) and the current signed URL
+  // Store the storageKey + backend (for regenerating signed URLs later)
   await updateOfferLetter(offerId, {
     generatedFileUrl: signedUrl,
     generatedFileHash: hash,
     storageKey,
+    storageBackend,
   });
 
   return signedUrl;

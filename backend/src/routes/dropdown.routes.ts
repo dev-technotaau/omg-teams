@@ -16,7 +16,10 @@ const router = Router();
 router.use(requireAuth);
 
 router.get("/:category", handleListDropdownOptions);
-router.post("/", requireAdmin, handleCreateDropdownOption);
+// POST is auth-only; the controller gates by category (only LOCATION + PROFILE
+// can be created by non-admins, so the recruiter form's backfill flow works
+// without exposing the whole master-data surface).
+router.post("/", handleCreateDropdownOption);
 router.patch("/:id", requireAdmin, handleUpdateDropdownOption);
 router.delete("/:id", requireAdmin, handleDeleteDropdownOption);
 router.post("/reorder", requireAdmin, handleReorderDropdownOptions);

@@ -63,9 +63,15 @@ export function getSignedCloudinaryUrl(
   return url;
 }
 
+export type StorageBackendHint = "CLOUDINARY" | "R2";
+
 /**
  * Generate a signed download URL for any storage key.
- * Auto-detects whether the key is Cloudinary (contains "/") or R2.
+ *
+ * Pass `backend` whenever the caller knows it (every row backed by the
+ * storage tables now stores this alongside the key). When `backend` is
+ * null/undefined, we fall back to the legacy heuristic — preferring
+ * whichever backend is currently configured — for pre-migration rows.
  */
 export async function getSignedDownloadUrl(
   storageKey: string,
@@ -73,17 +79,25 @@ export async function getSignedDownloadUrl(
     ttlSeconds?: number;
     contentDisposition?: string;
     resourceType?: "image" | "raw";
+    backend?: StorageBackendHint | null;
   } = {},
 ): Promise<string> {
   if (!storageKey) {
     throw new Error("No storage key provided");
   }
 
-  // Cloudinary public IDs contain "/" (e.g., "avatars/userId/publicId")
-  const isCloudinary =
-    env.hasCloudinary && storageKey.includes("/") && !storageKey.startsWith("http");
+  // Explicit backend → trust it. This is the path every new upload takes.
+  if (opts.backend === "CLOUDINARY") {
+    return getSignedCloudinaryUrl(storageKey, opts.resourceType ?? "image", opts.ttlSeconds);
+  }
+  if (opts.backend === "R2") {
+    return getSignedR2Url(storageKey, opts.ttlSeconds, opts.contentDisposition);
+  }
 
-  if (isCloudinary) {
+  // Backwards-compat fallback for rows written before the storage_backend
+  // column existed. Prefer Cloudinary when configured (matches the historical
+  // upload-priority order in upload.controller.resolveStorage).
+  if (env.hasCloudinary && !storageKey.startsWith("http")) {
     return getSignedCloudinaryUrl(storageKey, opts.resourceType ?? "image", opts.ttlSeconds);
   }
 
@@ -108,6 +122,9 @@ interface DownloadTokenPayload {
   expiresAt: number; // Unix timestamp
   disposition: "inline" | "attachment";
   fileName?: string;
+  /** Explicit storage backend — preserves backend across token roundtrips
+   *  so the download endpoint doesn't have to guess from the key shape. */
+  backend?: StorageBackendHint;
 }
 
 const TOKEN_SECRET = () => env.JWT_SECRET || env.COOKIE_SECRET || "fallback-token-secret";
@@ -123,6 +140,7 @@ export function generateDownloadToken(
     ttlSeconds?: number;
     disposition?: "inline" | "attachment";
     fileName?: string;
+    backend?: StorageBackendHint;
   } = {},
 ): string {
   const ttl = opts.ttlSeconds ?? env.SIGNED_URL_TTL;
@@ -132,6 +150,7 @@ export function generateDownloadToken(
     expiresAt: Math.floor(Date.now() / 1000) + ttl,
     disposition: opts.disposition ?? "attachment",
     ...(opts.fileName ? { fileName: opts.fileName } : {}),
+    ...(opts.backend ? { backend: opts.backend } : {}),
   };
 
   const data = Buffer.from(JSON.stringify(payload)).toString("base64url");

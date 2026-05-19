@@ -13,6 +13,7 @@ import {
   cleanupExpiredReports,
   type ReportFilters,
 } from "../services/report.service.js";
+import { resolveScheduleConfig } from "../services/report-template.service.js";
 import type { ScheduledReportJob } from "./scheduled-report.queue.js";
 
 // ──────────────────────────────────────────────
@@ -102,8 +103,15 @@ async function processScheduledReport(job: Job<ScheduledReportJob>): Promise<voi
   await job.updateProgress(10);
 
   // ── 2. Generate XLSX report using shared service ──
-  const filters = (config.filters as ReportFilters) ?? {};
-  const { buffer, fileName } = await generateReport(config.reportType, filters);
+  // Resolve columns + filters with template precedence (template-linked
+  // schedules pick up template edits without touching the schedule row).
+  const resolved = await resolveScheduleConfig(configId);
+  const filters = resolved.filters as ReportFilters;
+  const { buffer, fileName, columnKeys } = await generateReport(
+    config.reportType,
+    filters,
+    resolved.columnKeys,
+  );
   const fileSize = buffer.byteLength;
 
   await job.updateProgress(60);
@@ -111,6 +119,7 @@ async function processScheduledReport(job: Job<ScheduledReportJob>): Promise<voi
   // ── 3. Upload to R2 cloud storage (if configured) ──
   let cloudUrl: string | null = null;
   let cloudStorageKey: string | null = null;
+  let storageBackend: "R2" | null = null;
 
   if (env.hasR2) {
     try {
@@ -131,6 +140,7 @@ async function processScheduledReport(job: Job<ScheduledReportJob>): Promise<voi
         undefined,
         `attachment; filename="${fileName}"`,
       );
+      storageBackend = "R2";
 
       logger.info("Report uploaded to R2", { cloudStorageKey });
     } catch (err) {
@@ -149,9 +159,11 @@ async function processScheduledReport(job: Job<ScheduledReportJob>): Promise<voi
       reportName: `${config.reportName} - ${new Date().toISOString().slice(0, 10)}`,
       source: "SCHEDULED",
       ...(config.filters !== null && { filters: config.filters }),
+      columnConfig: columnKeys,
       fileSize,
       cloudUrl,
       cloudStorageKey,
+      storageBackend,
       expiresAt: new Date(Date.now() + retentionDays * 24 * 60 * 60 * 1000),
     },
   });
