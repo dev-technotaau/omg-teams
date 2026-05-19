@@ -1,4 +1,8 @@
-import axios, { type AxiosError, type InternalAxiosRequestConfig } from "axios";
+import axios, {
+  AxiosHeaders,
+  type AxiosError,
+  type InternalAxiosRequestConfig,
+} from "axios";
 
 // ──────────────────────────────────────────────
 //  Axios API Client (BFF Pattern)
@@ -19,6 +23,23 @@ export const api = axios.create({
   headers: {
     "Content-Type": "application/json",
   },
+});
+
+// ── Request interceptor ──
+// Strip the instance-default `Content-Type: application/json` when the body
+// is FormData. Without this, axios 1.x sends the JSON content-type with a
+// multipart body and multer on the backend returns "no file provided". The
+// browser/XHR will then auto-generate the correct
+// `multipart/form-data; boundary=...` header.
+api.interceptors.request.use((config) => {
+  if (typeof FormData !== "undefined" && config.data instanceof FormData) {
+    if (config.headers instanceof AxiosHeaders) {
+      config.headers.delete("Content-Type");
+    } else if (config.headers && typeof config.headers === "object") {
+      delete (config.headers as Record<string, unknown>)["Content-Type"];
+    }
+  }
+  return config;
 });
 
 // ── Response interceptor ──
