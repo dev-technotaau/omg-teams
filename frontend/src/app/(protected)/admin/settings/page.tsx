@@ -16,6 +16,7 @@ import { useQuery } from "@tanstack/react-query";
 import { qk } from "@/lib/query-keys";
 import { api, extractApiError } from "@/lib/api";
 import { uploadSignatureImage, deleteSignatureImage } from "@/services/upload.service";
+import { withUploadToast, withActionToast } from "@/lib/upload-toast";
 import { settingValueSchema } from "@/validators/settings";
 import type { SettingItem, SettingFieldDef } from "@/types/setting";
 import {
@@ -312,11 +313,13 @@ export default function SettingsPage() {
 
     setSignatureUploading(true);
     try {
-      const result = await uploadSignatureImage(file);
+      const result = await withUploadToast(
+        "signature image",
+        () => uploadSignatureImage(file),
+      );
       setSignatureUrl(result.url);
-      toast.success("Signature image uploaded");
-    } catch (err) {
-      toast.error(extractApiError(err).message);
+    } catch {
+      /* withUploadToast already surfaced the error toast */
     } finally {
       setSignatureUploading(false);
       // Reset file input
@@ -327,11 +330,10 @@ export default function SettingsPage() {
   const handleSignatureDelete = async () => {
     setSignatureDeleting(true);
     try {
-      await deleteSignatureImage();
+      await withActionToast("signature image", "removed", deleteSignatureImage);
       setSignatureUrl(null);
-      toast.success("Signature image removed");
-    } catch (err) {
-      toast.error(extractApiError(err).message);
+    } catch {
+      /* withActionToast already surfaced the error toast */
     } finally {
       setSignatureDeleting(false);
     }

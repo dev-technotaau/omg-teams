@@ -47,43 +47,48 @@ export function useNotificationSound(): UseNotificationSoundReturn {
 
   // AudioContext is a heavy object — keep one per provider instance.
   const ctxRef = useRef<AudioContext | null>(null);
+  // Chrome's autoplay policy blocks AudioContext construction until the
+  // user has interacted with the page. Constructing one beforehand also
+  // emits a console warning even if we never call play(). Gate ALL
+  // AudioContext access on this flag so a notification arriving before
+  // any user gesture is a silent skip (not a warning).
+  const unlockedRef = useRef(false);
 
-  // Lazily build the AudioContext on first use. Construction inside an
-  // effect would force it to live for the page's lifetime even when no
-  // notifications ever arrive.
-  const getCtx = useCallback((): AudioContext | null => {
-    if (typeof window === "undefined") return null;
-    if (ctxRef.current) return ctxRef.current;
-    const W = window as unknown as {
-      AudioContext?: typeof AudioContext;
-      webkitAudioContext?: typeof AudioContext;
-    };
-    const Ctor = W.AudioContext ?? W.webkitAudioContext;
-    if (!Ctor) return null;
-    try {
-      ctxRef.current = new Ctor();
-      return ctxRef.current;
-    } catch {
-      return null;
-    }
-  }, []);
-
-  // Browsers (esp. Chrome / Safari) keep new AudioContexts suspended
-  // until a user gesture. Resume on the first click anywhere on the
-  // page so the next notification chime actually plays.
+  // Build (and immediately resume) the AudioContext on the FIRST user
+  // gesture. Both the construction and the resume happen inside the
+  // gesture handler — only then does Chrome consider the AudioContext
+  // "allowed to start" and the autoplay warning never fires.
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const resume = () => {
-      const ctx = getCtx();
-      if (ctx && ctx.state === "suspended") void ctx.resume();
+    const unlock = () => {
+      if (unlockedRef.current) return;
+      const W = window as unknown as {
+        AudioContext?: typeof AudioContext;
+        webkitAudioContext?: typeof AudioContext;
+      };
+      const Ctor = W.AudioContext ?? W.webkitAudioContext;
+      if (!Ctor) {
+        unlockedRef.current = true; // No WebAudio support — flag as "done", play() will no-op
+        return;
+      }
+      try {
+        const ctx = new Ctor();
+        if (ctx.state === "suspended") void ctx.resume();
+        ctxRef.current = ctx;
+      } catch {
+        // Best-effort — leave ctxRef null, play() will no-op
+      }
+      unlockedRef.current = true;
     };
-    window.addEventListener("pointerdown", resume, { once: true });
-    window.addEventListener("keydown", resume, { once: true });
+    window.addEventListener("pointerdown", unlock, { once: true });
+    window.addEventListener("keydown", unlock, { once: true });
+    window.addEventListener("touchstart", unlock, { once: true });
     return () => {
-      window.removeEventListener("pointerdown", resume);
-      window.removeEventListener("keydown", resume);
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+      window.removeEventListener("touchstart", unlock);
     };
-  }, [getCtx]);
+  }, []);
 
   const play = useCallback(
     (category: string) => {
@@ -103,8 +108,15 @@ export function useNotificationSound(): UseNotificationSoundReturn {
       const bypassQuiet = category === "SYSTEM" || category === "ACCOUNT";
       if (qh && !bypassQuiet && isInQuietHours(qh)) return;
 
-      const ctx = getCtx();
+      // If the user hasn't interacted with the page yet, the AudioContext
+      // can't be created without triggering Chrome's autoplay warning.
+      // Silently skip — there'll be other notifications later.
+      if (!unlockedRef.current) return;
+      const ctx = ctxRef.current;
       if (!ctx) return;
+      // Re-resume in case the browser auto-suspended after some idle time
+      // (Chrome does this on hidden tabs). resume() is a no-op when running.
+      if (ctx.state === "suspended") void ctx.resume();
 
       // Two-note chime — high then slightly lower, ~120ms total. Subtle,
       // not jarring. Volume kept low (0.08) so it's audible without
@@ -131,7 +143,7 @@ export function useNotificationSound(): UseNotificationSoundReturn {
         // Best-effort — never let an audio failure surface to the user
       }
     },
-    [prefsQuery.data, quietHoursQuery.data, getCtx],
+    [prefsQuery.data, quietHoursQuery.data],
   );
 
   return { play };

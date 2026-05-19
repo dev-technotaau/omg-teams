@@ -21,6 +21,7 @@ import {
   uploadProfilePhoto as uploadPhoto,
   deleteProfilePhoto as removePhoto,
 } from "@/services/upload.service";
+import { withUploadToast, withActionToast } from "@/lib/upload-toast";
 import {
   PageHeader,
   Card,
@@ -168,23 +169,27 @@ export default function ProfilePage() {
     setShowCrop(false);
     try {
       const file = new File([blob], "profile.jpg", { type: "image/jpeg" });
-      await uploadPhoto(file);
-      if (refresh) await refresh();
-      toast.success("Profile photo updated");
-    } catch (err) {
-      const { extractApiError } = await import("@/lib/api");
-      const apiErr = extractApiError(err);
-      toast.error(apiErr.message || "Failed to upload photo");
+      await withUploadToast(
+        "profile photo",
+        async () => {
+          await uploadPhoto(file);
+          if (refresh) await refresh();
+        },
+        { successMessage: "Profile photo updated" },
+      );
+    } catch {
+      /* withUploadToast already surfaced the error toast */
     }
   };
 
   const handleRemovePhoto = async () => {
     try {
-      await removePhoto();
-      if (refresh) await refresh();
-      toast.success("Profile photo removed");
+      await withActionToast("profile photo", "removed", async () => {
+        await removePhoto();
+        if (refresh) await refresh();
+      });
     } catch {
-      toast.error("Failed to remove photo");
+      /* withActionToast already surfaced the error toast */
     }
   };
 

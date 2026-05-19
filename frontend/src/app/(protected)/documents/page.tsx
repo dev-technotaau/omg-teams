@@ -4,9 +4,9 @@ import { useState, useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { qk } from "@/lib/query-keys";
 import { Upload, CheckCircle, XCircle, Clock } from "lucide-react";
-import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { uploadKycDocument } from "@/services/upload.service";
+import { withUploadToast } from "@/lib/upload-toast";
 import { PageHeader, Card, Badge, Button, Modal, FileUpload, Progress } from "@/components/ui";
 import { DOCUMENT_STATUS_BADGE } from "@/constants/statuses";
 import type { EmployeeDocument as EmployeeDoc, DocumentType as DocType } from "@/types/document";
@@ -61,30 +61,36 @@ export default function MyDocumentsPage() {
 
   const handleUpload = async () => {
     if (!uploadTarget || uploadFiles.length === 0) return;
+    const file = uploadFiles[0];
+    if (!file) return;
+    const targetName = uploadTarget.name;
     try {
-      // Step 1: Upload file to Cloudinary via /uploads/document
-      const file = uploadFiles[0];
-      const result = await uploadKycDocument(file);
-
-      // Step 2: Create document record with the returned metadata.
-      // Forward storageBackend so the DB row records which backend stored the
-      // file — the signed-url helper no longer has to guess from the key shape.
-      await api.post("/documents/upload", {
-        documentTypeId: uploadTarget.id,
-        fileUrl: result.url,
-        fileName: result.originalName ?? file.name,
-        fileSize: result.size ?? file.size,
-        mimeType: result.mimeType ?? file.type,
-        storageKey: result.storageKey,
-        ...(result.storageBackend && { storageBackend: result.storageBackend }),
-      });
-
-      toast.success("Document uploaded");
+      await withUploadToast(
+        targetName,
+        async () => {
+          // Step 1: Upload file to Cloudinary via /uploads/document
+          const result = await uploadKycDocument(file);
+          // Step 2: Create document record with the returned metadata.
+          // Forward storageBackend so the DB row records which backend stored
+          // the file — the signed-url helper no longer has to guess from the
+          // key shape.
+          await api.post("/documents/upload", {
+            documentTypeId: uploadTarget.id,
+            fileUrl: result.url,
+            fileName: result.originalName ?? file.name,
+            fileSize: result.size ?? file.size,
+            mimeType: result.mimeType ?? file.type,
+            storageKey: result.storageKey,
+            ...(result.storageBackend && { storageBackend: result.storageBackend }),
+          });
+        },
+        { successMessage: `${targetName} uploaded` },
+      );
       setUploadTarget(null);
       setUploadFiles([]);
       void fetchData();
     } catch {
-      toast.error("Failed to upload document");
+      /* withUploadToast already surfaced the error toast */
     }
   };
 

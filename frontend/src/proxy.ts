@@ -56,7 +56,11 @@ function buildCsp(nonce: string): string {
     "https://lh3.googleusercontent.com",
     "https://avatars.githubusercontent.com",
   ];
-  if (cloudinaryCloud) imgSources.push(`https://res.cloudinary.com/${cloudinaryCloud}`);
+  // Trailing slash is load-bearing: CSP source-with-path matching is EXACT
+  // when there's no trailing slash, and PREFIX when there is. Without the
+  // slash, only the literal `/<cloud>` URL is allowed and every actual
+  // asset URL (`/<cloud>/image/authenticated/...`) gets blocked.
+  if (cloudinaryCloud) imgSources.push(`https://res.cloudinary.com/${cloudinaryCloud}/`);
   if (r2Url) imgSources.push(r2Url);
   if (firebaseProjectId) {
     imgSources.push(
