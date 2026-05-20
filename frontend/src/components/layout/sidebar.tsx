@@ -4,36 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { api } from "@/lib/api";
-import {
-  LayoutDashboard,
-  FileText,
-  FilePlus,
-  Users,
-  Building2,
-  BarChart3,
-  ClipboardList,
-  Calendar,
-  CalendarDays,
-  FolderOpen,
-  Settings,
-  Trash2,
-  History,
-  Target,
-  Mail,
-  ListChecks,
-  Database,
-  Shield,
-  ChevronLeft,
-  Copy,
-  Upload,
-  Monitor,
-  Archive,
-  FileSignature,
-  FileCheck,
-  Webhook,
-  Activity,
-  CheckSquare,
-} from "lucide-react";
+import { ChevronLeft, ChevronDown } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useAuth } from "@/contexts/auth";
 import { useUIStore } from "@/store/ui";
@@ -41,149 +12,192 @@ import { cn } from "@/lib/utils";
 import { ROLES } from "@/constants/roles";
 import { ROUTES } from "@/constants/routes";
 import { useIsMobile } from "@/hooks";
-import type { LucideIcon } from "lucide-react";
+import {
+  NAV_ITEMS,
+  ADMIN_TOP_LEVEL,
+  ADMIN_GROUPS,
+  flattenAdmin,
+  type NavItem,
+  type NavGroup,
+} from "@/lib/nav-config";
 
 // ──────────────────────────────────────────────
 //  Sidebar Navigation — Spec Section 18
-//  Role-based menu, collapsible, active states
+//  Role-based menu, collapsible, active states.
+//  Nav data lives in `@/lib/nav-config` so the sidebar + the Cmd+K
+//  command palette share a single source of truth.
 // ──────────────────────────────────────────────
-
-interface NavItem {
-  label: string;
-  href: string;
-  icon: LucideIcon;
-  roles: string[];
-  badge?: number;
-}
-
-const NAV_ITEMS: NavItem[] = [
-  // ── Recruiter & RM shared dashboard ──
-  {
-    label: "Dashboard",
-    href: ROUTES.DASHBOARD,
-    icon: LayoutDashboard,
-    roles: [ROLES.RECRUITER, ROLES.REPORTING_MANAGER],
-  },
-
-  // ── Admin dashboard ──
-  { label: "Dashboard", href: ROUTES.ADMIN_DASHBOARD, icon: LayoutDashboard, roles: [ROLES.ADMIN] },
-
-  // ── Recruiter ──
-  { label: "Add Report", href: ROUTES.REPORTS_NEW, icon: FilePlus, roles: [ROLES.RECRUITER] },
-  { label: "My Reports", href: ROUTES.REPORTS, icon: FileText, roles: [ROLES.RECRUITER] },
-  { label: "My Targets", href: ROUTES.MY_TARGETS, icon: Target, roles: [ROLES.RECRUITER] },
-  // §Task — open-task badge injected at render time
-  {
-    label: "My Tasks",
-    href: ROUTES.MY_TASKS,
-    icon: CheckSquare,
-    roles: [ROLES.RECRUITER, ROLES.REPORTING_MANAGER],
-  },
-
-  // ── Reporting Manager ──
-  {
-    label: "My Recruiters",
-    href: ROUTES.MY_RECRUITERS,
-    icon: Users,
-    roles: [ROLES.REPORTING_MANAGER],
-  },
-  { label: "Team Reports", href: ROUTES.REPORTS, icon: FileText, roles: [ROLES.REPORTING_MANAGER] },
-  {
-    label: "Team Attendance",
-    href: ROUTES.TEAM_ATTENDANCE,
-    icon: Calendar,
-    roles: [ROLES.REPORTING_MANAGER],
-  },
-  {
-    label: "Team Leaves",
-    href: ROUTES.TEAM_LEAVES,
-    icon: CalendarDays,
-    roles: [ROLES.REPORTING_MANAGER],
-  },
-  {
-    label: "Team Targets",
-    href: ROUTES.TEAM_TARGETS,
-    icon: Target,
-    roles: [ROLES.REPORTING_MANAGER],
-  },
-
-  // ── Common (Recruiter + RM) ──
-  {
-    label: "My Attendance",
-    href: ROUTES.ATTENDANCE,
-    icon: Calendar,
-    roles: [ROLES.RECRUITER, ROLES.REPORTING_MANAGER],
-  },
-  {
-    label: "My Leaves",
-    href: ROUTES.LEAVES,
-    icon: CalendarDays,
-    roles: [ROLES.RECRUITER, ROLES.REPORTING_MANAGER],
-  },
-  {
-    label: "My Documents",
-    href: ROUTES.DOCUMENTS,
-    icon: FolderOpen,
-    roles: [ROLES.RECRUITER, ROLES.REPORTING_MANAGER],
-  },
-
-  // ── Admin ──
-  { label: "Employees", href: ROUTES.ADMIN_EMPLOYEES, icon: Users, roles: [ROLES.ADMIN] },
-  { label: "User Management", href: ROUTES.ADMIN_USERS, icon: Shield, roles: [ROLES.ADMIN] },
-  {
-    label: "Candidate Reports",
-    href: ROUTES.ADMIN_REPORTS,
-    icon: ClipboardList,
-    roles: [ROLES.ADMIN],
-  },
-  { label: "Companies", href: ROUTES.ADMIN_COMPANIES, icon: Building2, roles: [ROLES.ADMIN] },
-  {
-    label: "Reports Mgmt",
-    href: ROUTES.ADMIN_REPORTS_MANAGEMENT,
-    icon: FileText,
-    roles: [ROLES.ADMIN],
-  },
-  { label: "Analytics", href: ROUTES.ADMIN_ANALYTICS, icon: BarChart3, roles: [ROLES.ADMIN] },
-  { label: "Attendance", href: ROUTES.ADMIN_ATTENDANCE, icon: Calendar, roles: [ROLES.ADMIN] },
-  { label: "Leave Mgmt", href: ROUTES.ADMIN_LEAVES, icon: CalendarDays, roles: [ROLES.ADMIN] },
-  { label: "Documents", href: ROUTES.ADMIN_DOCUMENTS, icon: FolderOpen, roles: [ROLES.ADMIN] },
-  {
-    label: "Document Types",
-    href: ROUTES.ADMIN_DOCUMENT_TYPES,
-    icon: FileCheck,
-    roles: [ROLES.ADMIN],
-  },
-  {
-    label: "Offer Letters",
-    href: ROUTES.ADMIN_OFFER_LETTERS,
-    icon: FileSignature,
-    roles: [ROLES.ADMIN],
-  },
-  { label: "Duplicates", href: ROUTES.ADMIN_DUPLICATES, icon: Copy, roles: [ROLES.ADMIN] },
-  { label: "Targets", href: ROUTES.ADMIN_TARGETS, icon: Target, roles: [ROLES.ADMIN] },
-  // §Task — awaiting-review badge injected at render time
-  { label: "Tasks", href: ROUTES.ADMIN_TASKS, icon: CheckSquare, roles: [ROLES.ADMIN] },
-  { label: "Import", href: ROUTES.ADMIN_IMPORT, icon: Upload, roles: [ROLES.ADMIN] },
-  { label: "Sessions", href: ROUTES.ADMIN_SESSIONS, icon: Monitor, roles: [ROLES.ADMIN] },
-  { label: "Audit Log", href: ROUTES.ADMIN_AUDIT_LOGS, icon: History, roles: [ROLES.ADMIN] },
-  { label: "Trash", href: ROUTES.ADMIN_TRASH, icon: Trash2, roles: [ROLES.ADMIN] },
-  { label: "Archive", href: ROUTES.ADMIN_ARCHIVE, icon: Archive, roles: [ROLES.ADMIN] },
-  { label: "Master Data", href: ROUTES.ADMIN_MASTER_DATA, icon: Database, roles: [ROLES.ADMIN] },
-  {
-    label: "Email Templates",
-    href: ROUTES.ADMIN_EMAIL_TEMPLATES,
-    icon: Mail,
-    roles: [ROLES.ADMIN],
-  },
-  { label: "Holidays", href: ROUTES.ADMIN_HOLIDAYS, icon: ListChecks, roles: [ROLES.ADMIN] },
-  { label: "Webhooks", href: ROUTES.ADMIN_WEBHOOKS, icon: Webhook, roles: [ROLES.ADMIN] },
-  { label: "Queues", href: ROUTES.ADMIN_QUEUES, icon: Activity, roles: [ROLES.ADMIN] },
-  { label: "Settings", href: ROUTES.ADMIN_SETTINGS, icon: Settings, roles: [ROLES.ADMIN] },
-];
 
 /** sessionStorage key for the sidebar nav scroll position. Sidebar is
  *  one global widget so a single key (not per-pathname) is correct. */
 const SIDEBAR_SCROLL_KEY = "omg.sidebar.scrollTop";
+
+/** localStorage key for which admin sidebar groups are expanded.
+ *  Persists across reloads so admins don't have to re-open their
+ *  preferred sections every visit. */
+const SIDEBAR_OPEN_GROUPS_KEY = "omg.sidebar.openGroups";
+
+/**
+ * Admin nav group section — collapsible header + indented children
+ * with rounded tree connectors AND a hover-trace effect.
+ *
+ * Hover behaviour:
+ *   - When the user hovers child N, the wire is highlighted in
+ *     brand-primary from the top of the group down to and including
+ *     child N's L-corner. Children below stay default-coloured.
+ *   - Moving to a different child re-traces the path smoothly
+ *     (CSS color transition on the pseudo-element borders).
+ *   - Leaving the children block clears the hover state and the wire
+ *     fades back to default.
+ *   - The active child's `::before` is independently primary, so it
+ *     remains highlighted regardless of hover.
+ *
+ * Implementation notes:
+ *   - Per-group local state (one `hoveredIndex`) so hovering one
+ *     group doesn't affect another.
+ *   - `::before` and `::after` get `transition-colors duration-200`
+ *     so the colour swap eases in/out.
+ */
+function NavGroupSection({
+  group,
+  items,
+  isOpen,
+  isActiveGroup,
+  onToggle,
+  isPathActive,
+  onNavigate,
+}: {
+  group: NavGroup;
+  items: NavItem[];
+  isOpen: boolean;
+  isActiveGroup: boolean;
+  onToggle: () => void;
+  isPathActive: (href: string) => boolean;
+  onNavigate: () => void;
+}) {
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const activeIndex = items.findIndex((c) => isPathActive(c.href));
+  const GroupIcon = group.icon;
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={isOpen}
+        className={cn(
+          "mx-2 my-1 flex w-[calc(100%-1rem)] items-center gap-3 rounded-md px-3 py-2.5 text-sm transition-colors",
+          isActiveGroup
+            ? "text-text-sidebar-active font-medium"
+            : "text-text-sidebar hover:text-text-sidebar-active hover:bg-bg-hover",
+        )}
+      >
+        <GroupIcon size={18} className="shrink-0" />
+        <span className="flex-1 truncate text-left">{group.label}</span>
+        <ChevronDown
+          size={16}
+          className={cn("shrink-0 transition-transform", isOpen && "rotate-180")}
+        />
+      </button>
+      {isOpen && (
+        <div
+          className="relative mx-2 mb-1 pl-5"
+          onMouseLeave={() => setHoveredIndex(null)}
+        >
+          {items.map((child, index) => {
+            const isActive = index === activeIndex;
+            // ── Trace-highlight rules ──
+            // Two independent anchors can light up the trace:
+            //   1. Hover anchor → hoveredIndex (transient)
+            //   2. Active anchor → activeIndex (sticks after clicking)
+            // The trace extends from the top of the group down to whichever
+            // anchor is further (`max(hoveredIndex, activeIndex)`), so:
+            //   - With nothing hovered, the trace shows the active path.
+            //   - Hovering BELOW the active row extends the trace further.
+            //   - Hovering ABOVE the active row keeps the active trace
+            //     intact (active-anchor dominates).
+            //   - On mouseleave, the trace falls back to the active path.
+            const hoverIdx = hoveredIndex ?? -1;
+            const pathEnd = Math.max(hoverIdx, activeIndex);
+            const beforeHighlight = pathEnd >= 0 && index <= pathEnd;
+            const afterHighlight = pathEnd >= 0 && index < pathEnd;
+            const Icon = child.icon;
+            return (
+              <Link
+                key={child.href}
+                href={child.href}
+                onMouseEnter={() => setHoveredIndex(index)}
+                onClick={onNavigate}
+                className={cn(
+                  "group/child relative my-0.5 ml-3 flex items-center gap-2 rounded-md px-2.5 py-1.5 text-sm transition-colors",
+                  // L-piece (top half) with rounded corner + horizontal tick
+                  "before:absolute before:-left-3 before:top-0 before:h-1/2 before:w-3 before:rounded-bl-md before:border-b before:border-l before:transition-colors before:duration-200",
+                  // Vertical continuation (lower half) — hidden on the last child
+                  "after:absolute after:-left-3 after:top-1/2 after:bottom-0 after:w-3 after:border-l after:transition-colors after:duration-200 last:after:content-none",
+                  beforeHighlight
+                    ? "before:border-primary-500"
+                    : "before:border-border-default",
+                  afterHighlight
+                    ? "after:border-primary-500"
+                    : "after:border-border-default",
+                  isActive
+                    ? "bg-primary-500/20 text-text-sidebar-active font-medium"
+                    : "text-text-sidebar hover:text-text-sidebar-active hover:bg-bg-hover",
+                )}
+              >
+                <Icon size={14} className="shrink-0" />
+                <span className="flex-1 truncate">{child.label}</span>
+                {child.badge != null && child.badge > 0 && (
+                  <span className="bg-error-500 ml-auto inline-flex h-4 min-w-[16px] items-center justify-center rounded-full px-1 text-[10px] font-bold text-white">
+                    {child.badge > 99 ? "99+" : child.badge}
+                  </span>
+                )}
+              </Link>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Single nav row — used by every render branch (admin top-level,
+ *  admin grouped children render their own variant below, recruiter/RM
+ *  flat, and the collapsed icon rail). */
+function SidebarLink({
+  item,
+  isActive,
+  expanded,
+  onNavigate,
+}: {
+  item: NavItem;
+  isActive: boolean;
+  expanded: boolean;
+  onNavigate: () => void;
+}) {
+  const Icon = item.icon;
+  return (
+    <Link
+      href={item.href}
+      onClick={onNavigate}
+      title={!expanded ? item.label : undefined}
+      className={cn(
+        "mx-2 my-1 flex items-center gap-3 rounded-md px-3 py-2.5 text-sm transition-colors",
+        isActive
+          ? "bg-primary-500/20 text-text-sidebar-active font-medium"
+          : "text-text-sidebar hover:text-text-sidebar-active hover:bg-bg-hover",
+      )}
+    >
+      <Icon size={18} className="shrink-0" />
+      {expanded && <span className="flex-1 truncate">{item.label}</span>}
+      {item.badge != null && item.badge > 0 && (
+        <span className="bg-error-500 ml-auto inline-flex h-5 min-w-[20px] items-center justify-center rounded-full px-1.5 text-[10px] font-bold text-white">
+          {item.badge > 99 ? "99+" : item.badge}
+        </span>
+      )}
+    </Link>
+  );
+}
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -294,21 +308,72 @@ export function Sidebar() {
     return () => clearInterval(interval);
   }, [role]);
 
-  const filteredItems = NAV_ITEMS.filter((item) => item.roles.includes(role)).map((item) => {
-    // Inject pending doc count badge on the admin Documents nav item
+  // Centralised badge injection — applied wherever a NavItem is rendered
+  // (admin grouped, admin flat in collapsed mode, recruiter/RM flat) so we
+  // don't have to remember to repeat the conditions per render branch.
+  const withBadge = (item: NavItem): NavItem => {
     if (item.href === ROUTES.ADMIN_DOCUMENTS && pendingDocCount > 0) {
       return { ...item, badge: pendingDocCount };
     }
-    // §Task — open-task badge on the recruiter / RM My Tasks item
     if (item.href === ROUTES.MY_TASKS && openTaskCount > 0) {
       return { ...item, badge: openTaskCount };
     }
-    // §Task — awaiting-review badge on the admin Tasks item
     if (item.href === ROUTES.ADMIN_TASKS && reviewTaskCount > 0) {
       return { ...item, badge: reviewTaskCount };
     }
     return item;
+  };
+
+  const isAdmin = role === ROLES.ADMIN;
+
+  // Recruiter / RM list (also used as the admin "flat" list when the sidebar
+  // is collapsed so every link is still one click away from the rail).
+  const flatItems = isAdmin
+    ? flattenAdmin().map(withBadge)
+    : NAV_ITEMS.filter((item) => item.roles.includes(role)).map(withBadge);
+
+  // ── Admin-only: collapsible groups ──
+  // openGroups holds the user's explicit toggle state, persisted in
+  // localStorage. The group that *contains* the active route always
+  // appears open regardless of the persisted state, so the admin always
+  // sees where they are without having to re-expand.
+  const [openGroups, setOpenGroups] = useState<Set<string>>(() => {
+    if (typeof window === "undefined") return new Set();
+    try {
+      const saved = window.localStorage.getItem(SIDEBAR_OPEN_GROUPS_KEY);
+      if (!saved) return new Set();
+      const parsed: unknown = JSON.parse(saved);
+      return new Set(Array.isArray(parsed) ? (parsed as string[]) : []);
+    } catch {
+      return new Set();
+    }
   });
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        SIDEBAR_OPEN_GROUPS_KEY,
+        JSON.stringify(Array.from(openGroups)),
+      );
+    } catch {
+      /* localStorage may be unavailable in private mode — ignore */
+    }
+  }, [openGroups]);
+
+  const toggleGroup = (label: string) => {
+    setOpenGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(label)) next.delete(label);
+      else next.add(label);
+      return next;
+    });
+  };
+
+  const isPathActive = (href: string) => pathname === href || pathname.startsWith(href + "/");
+
+  const activeGroupLabel = ADMIN_GROUPS.find((g) =>
+    g.children.some((c) => isPathActive(c.href)),
+  )?.label;
 
   return (
     <>
@@ -382,36 +447,56 @@ export function Sidebar() {
 
         {/* Nav Items */}
         <nav ref={navRef} className="flex-1 overflow-y-auto py-3">
-          {filteredItems.map((item) => {
-            const isActive = pathname === item.href || pathname.startsWith(item.href + "/");
-            const Icon = item.icon;
+          {/* Top-level + grouped only when admin AND expanded — collapsed
+              sidebar falls back to the flat rail so every link is one click
+              away. Recruiter/RM stays flat at all sizes (short enough). */}
+          {isAdmin && sidebarOpen ? (
+            <>
+              {ADMIN_TOP_LEVEL.map(withBadge).map((item) => (
+                <SidebarLink
+                  key={item.href}
+                  item={item}
+                  isActive={isPathActive(item.href)}
+                  expanded
+                  onNavigate={() => {
+                    if (isMobile) toggleSidebar();
+                  }}
+                />
+              ))}
 
-            return (
-              <Link
+              {/* Visual divider between pinned items and grouped sections */}
+              <div className="border-border-sidebar mx-4 my-2 border-t" />
+
+              {ADMIN_GROUPS.map((group) => (
+                <NavGroupSection
+                  key={group.label}
+                  group={group}
+                  items={group.children.map(withBadge)}
+                  isOpen={openGroups.has(group.label) || activeGroupLabel === group.label}
+                  isActiveGroup={activeGroupLabel === group.label}
+                  onToggle={() => toggleGroup(group.label)}
+                  isPathActive={isPathActive}
+                  onNavigate={() => {
+                    if (isMobile) toggleSidebar();
+                  }}
+                />
+              ))}
+            </>
+          ) : (
+            // Collapsed sidebar (any role) OR expanded recruiter/RM →
+            // flat list with full icon-only support in the collapsed rail.
+            flatItems.map((item) => (
+              <SidebarLink
                 key={item.href}
-                href={item.href}
-                onClick={() => {
+                item={item}
+                isActive={isPathActive(item.href)}
+                expanded={sidebarOpen}
+                onNavigate={() => {
                   if (isMobile) toggleSidebar();
                 }}
-                title={!sidebarOpen ? item.label : undefined}
-                className={cn(
-                  "mx-2 my-1 flex items-center gap-3 rounded-md px-3 py-2.5 text-sm transition-colors",
-                  isActive
-                    ? "bg-primary-500/20 text-text-sidebar-active font-medium"
-                    : "text-text-sidebar hover:text-text-sidebar-active hover:bg-bg-hover",
-                )}
-              >
-                <Icon size={18} className="shrink-0" />
-                {sidebarOpen && <span className="flex-1 truncate">{item.label}</span>}
-                {/* §29.5.1 — Pending count badge */}
-                {item.badge != null && item.badge > 0 && (
-                  <span className="bg-error-500 ml-auto inline-flex h-5 min-w-[20px] items-center justify-center rounded-full px-1.5 text-[10px] font-bold text-white">
-                    {item.badge > 99 ? "99+" : item.badge}
-                  </span>
-                )}
-              </Link>
-            );
-          })}
+              />
+            ))
+          )}
         </nav>
 
         {/* User info at bottom */}

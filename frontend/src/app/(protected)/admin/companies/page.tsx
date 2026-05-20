@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams } from "next/navigation";
 import { qk } from "@/lib/query-keys";
 import { toastApiError } from "@/lib/query-helpers";
 import { Plus, Building2, ChevronDown, ChevronRight, Trash2, Pencil } from "lucide-react";
@@ -32,6 +33,7 @@ import {
   ConfirmDialog,
   Tooltip,
 } from "@/components/ui";
+import { cn } from "@/lib/utils";
 
 export default function CompaniesPage() {
   const qc = useQueryClient();
@@ -69,6 +71,58 @@ export default function CompaniesPage() {
   });
 
   const invalidate = () => qc.invalidateQueries({ queryKey: qk.companies.lists() });
+
+  // ── Deep-link highlight (?highlight=<id>&type=company|sp|hr) ──
+  // Wired up so global-search results can land the user directly on the
+  // correct row instead of just the list. Behaviour:
+  //   - Resolves the parent company (the SP / HR live inside its expanded
+  //     panel, so we need to expand that one).
+  //   - Auto-expands the parent company.
+  //   - Scrolls the company card into view (smooth, centered).
+  //   - Flashes a primary-coloured ring on the matching row/chip for ~2.5s.
+  //   - Uses a ref so React-Query background refetches don't re-trigger
+  //     the flash every time `companies` gets a new array reference.
+  const searchParams = useSearchParams();
+  const highlightId = searchParams.get("highlight");
+  const highlightType = searchParams.get("type");
+  const companyCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const handledHighlightRef = useRef<string | null>(null);
+  const [flashId, setFlashId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!highlightId || !highlightType) return;
+    if (handledHighlightRef.current === highlightId) return;
+    if (isLoading || companies.length === 0) return;
+
+    let targetCompanyId: string | null = null;
+    if (highlightType === "company") {
+      targetCompanyId = highlightId;
+    } else if (highlightType === "sp") {
+      targetCompanyId =
+        companies.find((c) => c.serviceProviders.some((sp) => sp.id === highlightId))?.id ?? null;
+    } else if (highlightType === "hr") {
+      targetCompanyId =
+        companies.find((c) => c.hrManagers.some((hr) => hr.id === highlightId))?.id ?? null;
+    }
+    if (!targetCompanyId) return;
+
+    handledHighlightRef.current = highlightId;
+    // reason: syncing external state (URL search params) into local state
+    // (expand the target row + flash it). The handledHighlightRef gate
+    // makes this fire exactly once per highlightId, so it can't loop.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setExpandedId(targetCompanyId);
+    setFlashId(highlightId);
+
+    // Wait for the expansion render so the SP/HR row exists before scrolling.
+    requestAnimationFrame(() => {
+      const el = companyCardRefs.current[targetCompanyId!];
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+
+    const timer = setTimeout(() => setFlashId(null), 2500);
+    return () => clearTimeout(timer);
+  }, [highlightId, highlightType, companies, isLoading]);
 
   // ── Mutations ──
   // The companies tree (companies → SPs → HRs) is heavily nested, so each
@@ -273,8 +327,20 @@ export default function CompaniesPage() {
         <div className="space-y-2">
           {companies.map((company) => {
             const isExpanded = expandedId === company.id;
+            const isCompanyFlash = flashId === company.id;
             return (
-              <Card key={company.id} padding="sm">
+              <div
+                key={company.id}
+                ref={(el) => {
+                  companyCardRefs.current[company.id] = el;
+                }}
+                className={cn(
+                  "rounded-lg transition-all duration-300",
+                  isCompanyFlash &&
+                    "ring-primary-500 ring-2 ring-offset-2 ring-offset-bg-base",
+                )}
+              >
+              <Card padding="sm">
                 <div
                   className="focus-visible:ring-primary-500 flex cursor-pointer items-center justify-between rounded focus-visible:ring-2 focus-visible:outline-hidden"
                   role="button"
@@ -331,7 +397,11 @@ export default function CompaniesPage() {
                           {company.serviceProviders.map((sp) => (
                             <div
                               key={sp.id}
-                              className="bg-surface-secondary flex items-center gap-1 rounded px-2 py-1"
+                              className={cn(
+                                "bg-surface-secondary flex items-center gap-1 rounded px-2 py-1 transition-all duration-300",
+                                flashId === sp.id &&
+                                  "ring-primary-500 ring-2 ring-offset-2 ring-offset-bg-base",
+                              )}
                             >
                               <span className="text-text-primary text-xs">{sp.name}</span>
                               <button
@@ -375,7 +445,14 @@ export default function CompaniesPage() {
                       ) : (
                         <div className="space-y-1">
                           {company.hrManagers.map((hr) => (
-                            <div key={hr.id} className="flex items-center gap-2 text-xs">
+                            <div
+                              key={hr.id}
+                              className={cn(
+                                "flex items-center gap-2 rounded px-1 py-0.5 text-xs transition-all duration-300",
+                                flashId === hr.id &&
+                                  "ring-primary-500 ring-2 ring-offset-2 ring-offset-bg-base",
+                              )}
+                            >
                               <span className="text-text-primary font-medium">{hr.name}</span>
                               {hr.email && <span className="text-text-muted">{hr.email}</span>}
                               {hr.phone && <span className="text-text-muted">{hr.phone}</span>}
@@ -412,6 +489,7 @@ export default function CompaniesPage() {
                   </div>
                 )}
               </Card>
+              </div>
             );
           })}
         </div>

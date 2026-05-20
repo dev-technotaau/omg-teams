@@ -265,14 +265,15 @@ export function SearchInput({
       const newValue = e.target.value;
       onChange(newValue);
 
-      // Trigger page-level search with debounce
+      // Trigger page-level search with debounce.
+      // NOTE: do NOT save to history here. Saving on every debounced
+      // keystroke pollutes history with prefixes ("ja", "jak", "jakh"…).
+      // History is only saved on an explicit commit — Enter, suggestion
+      // click, "view all" — via executeSearch / navigateToSuggestion.
       if (onSearch) {
         if (debounceRef.current) clearTimeout(debounceRef.current);
         debounceRef.current = setTimeout(() => {
           onSearch(newValue);
-          if (historyKey && newValue.trim().length >= 2) {
-            addToHistory(historyKey, newValue);
-          }
         }, debounceMs);
       }
 

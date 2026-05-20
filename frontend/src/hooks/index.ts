@@ -18,3 +18,6 @@ export { useFilterPresets } from "./use-filter-presets";
 export type { FilterPreset } from "./use-filter-presets";
 export { useTabSearchParam } from "./use-tab-search-param";
 export { useNotificationSound } from "./use-notification-sound";
+export { usePinned, useRecents, useRecentQueries } from "./use-palette-state";
+export { useLeaderKey } from "./use-leader-key";
+export type { LeaderBinding } from "./use-leader-key";

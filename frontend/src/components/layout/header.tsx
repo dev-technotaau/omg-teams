@@ -12,15 +12,25 @@ import {
   Sun,
   BellRing,
   HelpCircle,
-  LayoutDashboard,
-  FileText,
-  Calendar,
   ExternalLink,
+  Pin,
+  FilePlus,
+  Download,
+  CalendarClock,
+  Target,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useAuth } from "@/contexts/auth";
 import { api } from "@/lib/api";
-import { useKeyboardShortcut } from "@/hooks";
+import {
+  useKeyboardShortcut,
+  usePinned,
+  useRecents,
+  useRecentQueries,
+  useLeaderKey,
+  type LeaderBinding,
+} from "@/hooks";
+import { ShortcutHud } from "@/components/layout/shortcut-hud";
 import { usePresence } from "@/hooks/use-presence";
 import { useUIStore } from "@/store/ui";
 import { useAppDispatch, useAppSelector, decrementUnreadCount } from "@/store/redux";
@@ -36,9 +46,12 @@ import {
 } from "@/components/ui";
 import type { NotificationData } from "@/components/ui";
 import { useClickOutside } from "@/hooks/use-click-outside";
+import { cn } from "@/lib/utils";
+import { ROLES } from "@/constants/roles";
 import { ROUTES } from "@/constants/routes";
+import { buildPaletteSections } from "@/lib/nav-config";
 import type { MenuGroup } from "@/components/ui/dropdown-menu";
-import type { CommandGroup } from "@/components/ui/command-palette";
+import type { CommandGroup, CommandItem } from "@/components/ui/command-palette";
 
 // ──────────────────────────────────────────────
 //  Top Header — Spec Section 18
@@ -173,80 +186,303 @@ export function Header() {
   );
 
   // -- Command palette groups --
-  const commandGroups: CommandGroup[] = useMemo(
-    () => [
-      {
-        label: "Navigation",
-        items: [
-          {
-            id: "nav-dashboard",
-            label: "Go to Dashboard",
-            icon: LayoutDashboard,
-            shortcut: "G D",
-            keywords: ["home", "overview"],
-            onSelect: () => router.push(ROUTES.DASHBOARD),
-          },
-          {
-            id: "nav-reports",
-            label: "Go to Reports",
-            icon: FileText,
-            shortcut: "G R",
-            keywords: ["analytics"],
-            onSelect: () => router.push(ROUTES.REPORTS),
-          },
-          {
-            id: "nav-schedule",
-            label: "Go to Schedule",
-            icon: Calendar,
-            shortcut: "G S",
-            keywords: ["calendar", "shifts"],
-            onSelect: () => router.push(ROUTES.ATTENDANCE),
-          },
-          {
-            id: "nav-notifications",
-            label: "Go to Notifications",
-            icon: Bell,
-            keywords: ["alerts"],
-            onSelect: () => router.push(ROUTES.NOTIFICATIONS),
-          },
-          {
-            id: "nav-search",
-            label: "Go to Search",
-            icon: Search,
-            keywords: ["find", "query", "global"],
-            onSelect: () => router.push(ROUTES.SEARCH),
-          },
-          {
-            id: "nav-profile",
-            label: "Go to Profile",
-            icon: User,
-            keywords: ["account", "settings"],
-            onSelect: () => router.push(ROUTES.PROFILE),
-          },
-        ],
-      },
-      {
-        label: "Actions",
-        items: [
-          {
-            id: "action-theme",
-            label: theme === "dark" ? "Switch to Light Mode" : "Switch to Dark Mode",
-            icon: theme === "dark" ? Sun : Moon,
-            keywords: ["theme", "dark", "light", "mode"],
-            onSelect: () => setTheme(theme === "dark" ? "light" : "dark"),
-          },
-          {
-            id: "action-logout",
-            label: "Logout",
-            icon: LogOut,
-            keywords: ["sign out", "exit"],
-            onSelect: () => void handleLogout(),
-          },
-        ],
-      },
-    ],
-    [router, theme, setTheme, handleLogout],
-  );
+  // ── Cmd+K palette state ──
+  // Pinned items, route-history "recents", and query history. All persisted
+  // in localStorage so the user's keyboard workflow survives reloads.
+  const { pinned, togglePin, isPinned } = usePinned();
+  const { recents } = useRecents();
+  const { queries: queryHistory, pushQuery } = useRecentQueries();
+
+  const role = user?.role ?? "";
+
+  // Map every nav item the user can see by href — used to resolve pinned/
+  // recent href strings back into the full NavItem so the palette can show
+  // them with the right icon + label + keywords + leader-key shortcut.
+  type NavEntry = {
+    label: string;
+    icon: typeof Bell;
+    href: string;
+    groupLabel: string | null;
+    keywords?: string[];
+    shortcut?: { key: string };
+  };
+  const navByHref = useMemo(() => {
+    const sections = buildPaletteSections(role);
+    const m = new Map<string, NavEntry>();
+    for (const section of sections) {
+      for (const item of section.items) {
+        const entry: NavEntry = {
+          label: item.label,
+          icon: item.icon,
+          href: item.href,
+          groupLabel: item.groupLabel,
+        };
+        if (item.keywords) entry.keywords = item.keywords;
+        if (item.shortcut) entry.shortcut = item.shortcut;
+        m.set(item.href, entry);
+      }
+    }
+    return m;
+  }, [role]);
+
+  // Pin/unpin button rendered at the right edge of every nav row.
+  // stopPropagation on the wrapping <span> in CommandPalette prevents the
+  // click from bubbling up to the row's onSelect, so toggling doesn't navigate.
+  const renderPinButton = (href: string) => {
+    const pinnedFlag = isPinned(href);
+    return (
+      <button
+        type="button"
+        title={pinnedFlag ? "Unpin from palette" : "Pin to palette"}
+        aria-label={pinnedFlag ? "Unpin" : "Pin"}
+        onClick={() => togglePin(href)}
+        className={cn(
+          "rounded p-1 transition-colors",
+          pinnedFlag
+            ? "text-yellow-500 hover:text-yellow-600"
+            : "text-text-muted opacity-0 group-hover/cmd:opacity-100 hover:text-text-primary",
+        )}
+      >
+        <Pin
+          size={12}
+          fill={pinnedFlag ? "currentColor" : "none"}
+          className={pinnedFlag ? "-rotate-45" : ""}
+        />
+      </button>
+    );
+  };
+
+  // Build a palette item from a nav entry (used by Pinned / Recents /
+  // every nav section). Keywords mirror the label + group label + any
+  // static aliases declared on the NavItem (e.g. "schedule" / "shifts"
+  // for the attendance row) so users keep finding things by their old
+  // names even after a rename in the nav config. The leader-key shortcut
+  // (if any) is shown as a `G X` kbd at the right edge.
+  const buildNavCommand = (nav: NavEntry): CommandItem => {
+    const keywords = ["navigate", "go to", nav.label.toLowerCase()];
+    if (nav.groupLabel) keywords.push(nav.groupLabel.toLowerCase());
+    if (nav.keywords) keywords.push(...nav.keywords);
+    const cmd: CommandItem = {
+      id: `nav-${nav.href}`,
+      label: nav.label,
+      icon: nav.icon,
+      keywords,
+      href: nav.href,
+      onSelect: () => router.push(nav.href),
+      trailing: renderPinButton(nav.href),
+    };
+    if (nav.shortcut) {
+      cmd.shortcut = `G ${nav.shortcut.key.toUpperCase()}`;
+    }
+    return cmd;
+  };
+
+  const commandGroups: CommandGroup[] = useMemo(() => {
+    const built: CommandGroup[] = [];
+
+    // ── Pinned (always at the top when present) ──
+    const pinnedItems = pinned
+      .map((href) => navByHref.get(href))
+      .filter((x): x is NonNullable<ReturnType<typeof navByHref.get>> => Boolean(x));
+    if (pinnedItems.length > 0) {
+      built.push({
+        label: "Pinned",
+        items: pinnedItems.map(buildNavCommand),
+      });
+    }
+
+    // ── Recents (excluding anything already pinned to avoid duplicates) ──
+    const recentItems = recents
+      .map((href) => navByHref.get(href))
+      .filter((x): x is NonNullable<ReturnType<typeof navByHref.get>> => Boolean(x))
+      .filter((item) => !pinned.includes(item.href));
+    if (recentItems.length > 0) {
+      built.push({
+        label: "Recents",
+        items: recentItems.map(buildNavCommand),
+      });
+    }
+
+    // ── Quick actions (role-specific shortcuts to create / generate / etc.) ──
+    const quickActions: CommandItem[] = [];
+    if (role === ROLES.RECRUITER) {
+      quickActions.push({
+        id: "qa-add-report",
+        label: "New candidate report",
+        icon: FilePlus,
+        keywords: ["create", "add", "candidate", "report", "new"],
+        href: ROUTES.REPORTS_NEW,
+        onSelect: () => router.push(ROUTES.REPORTS_NEW),
+      });
+    }
+    if (role === ROLES.ADMIN) {
+      const generateHref = `${ROUTES.ADMIN_REPORTS_MANAGEMENT}?tab=generate`;
+      const scheduleHref = `${ROUTES.ADMIN_REPORTS_MANAGEMENT}?tab=schedule`;
+      quickActions.push(
+        {
+          id: "qa-generate-report",
+          label: "Generate report…",
+          icon: Download,
+          keywords: ["download", "export", "xlsx", "generate", "report"],
+          href: generateHref,
+          onSelect: () => router.push(generateHref),
+        },
+        {
+          id: "qa-schedule-report",
+          label: "Schedule a report…",
+          icon: CalendarClock,
+          keywords: ["schedule", "recurring", "email", "report"],
+          href: scheduleHref,
+          onSelect: () => router.push(scheduleHref),
+        },
+        {
+          id: "qa-new-target",
+          label: "Set a new target…",
+          icon: Target,
+          keywords: ["create", "add", "goal", "target", "kpi"],
+          href: ROUTES.ADMIN_TARGETS,
+          onSelect: () => router.push(ROUTES.ADMIN_TARGETS),
+        },
+      );
+    }
+    if (quickActions.length > 0) {
+      built.push({ label: "Quick actions", items: quickActions });
+    }
+
+    // ── Navigation (every role-visible nav item, grouped by its group) ──
+    for (const section of buildPaletteSections(role)) {
+      if (section.items.length === 0) continue;
+      built.push({
+        label: section.label,
+        items: section.items.map(buildNavCommand),
+      });
+    }
+
+    // ── Account ──
+    // Pages that aren't part of the sidebar nav but the user often wants
+    // quick keyboard access to.
+    built.push({
+      label: "Account",
+      items: [
+        {
+          id: "nav-notifications",
+          label: "Notifications",
+          icon: Bell,
+          keywords: ["alerts", "inbox"],
+          href: ROUTES.NOTIFICATIONS,
+          onSelect: () => router.push(ROUTES.NOTIFICATIONS),
+        },
+        // Admin-only — global cross-entity search is an admin workflow and
+        // the page itself lives at /admin/search (gated by route prefix).
+        ...(role === ROLES.ADMIN
+          ? [
+              {
+                id: "nav-search",
+                label: "Global search",
+                icon: Search,
+                keywords: ["find", "query"],
+                href: ROUTES.SEARCH,
+                onSelect: () => router.push(ROUTES.SEARCH),
+              } as CommandItem,
+            ]
+          : []),
+        {
+          id: "nav-profile",
+          label: "My profile",
+          icon: User,
+          keywords: ["account", "me"],
+          href: ROUTES.PROFILE,
+          onSelect: () => router.push(ROUTES.PROFILE),
+        },
+        {
+          id: "nav-notif-settings",
+          label: "Notification settings",
+          icon: BellRing,
+          keywords: ["preferences", "quiet hours"],
+          href: ROUTES.NOTIFICATION_SETTINGS,
+          onSelect: () => router.push(ROUTES.NOTIFICATION_SETTINGS),
+        },
+        {
+          id: "nav-help",
+          label: "Help",
+          icon: HelpCircle,
+          keywords: ["docs", "support", "faq"],
+          href: ROUTES.HELP,
+          onSelect: () => router.push(ROUTES.HELP),
+        },
+      ],
+    });
+
+    // ── System actions ──
+    built.push({
+      label: "Actions",
+      items: [
+        {
+          id: "action-theme",
+          label: theme === "dark" ? "Switch to light mode" : "Switch to dark mode",
+          icon: theme === "dark" ? Sun : Moon,
+          keywords: ["theme", "dark", "light", "mode", "appearance"],
+          onSelect: () => setTheme(theme === "dark" ? "light" : "dark"),
+        },
+        {
+          id: "action-logout",
+          label: "Logout",
+          icon: LogOut,
+          keywords: ["sign out", "exit"],
+          onSelect: () => void handleLogout(),
+        },
+      ],
+    });
+
+    return built;
+    // buildNavCommand / renderPinButton are closures that depend on `pinned`
+    // (via isPinned). Listing `pinned` as a dep is sufficient; the closures
+    // are recreated each render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pinned, recents, role, navByHref, theme, setTheme, handleLogout, router]);
+
+  // ── Leader-key shortcuts (G D, G R, G A, etc.) ──
+  // Derived from the same nav-config used by the sidebar + palette so the
+  // three surfaces stay in sync. Account-level shortcuts (Notifications,
+  // Profile, Help, Search) are added below and aren't tied to any nav
+  // item. Conflicts within a single role are avoided at the nav-config
+  // level; nothing here resolves duplicates.
+  const leaderBindings: LeaderBinding[] = useMemo(() => {
+    const out: LeaderBinding[] = [];
+    for (const entry of navByHref.values()) {
+      if (entry.shortcut?.key) {
+        out.push({
+          key: entry.shortcut.key,
+          label: entry.label,
+          action: () => router.push(entry.href),
+        });
+      }
+    }
+    // Account / system shortcuts — same leader, single letters that don't
+    // conflict with any role's nav items.
+    out.push(
+      { key: "n", label: "Notifications", action: () => router.push(ROUTES.NOTIFICATIONS) },
+      { key: "p", label: "My profile", action: () => router.push(ROUTES.PROFILE) },
+      { key: "h", label: "Help", action: () => router.push(ROUTES.HELP) },
+      { key: "k", label: "Command palette", action: () => commandPalette.setOpen(true) },
+    );
+    // Admin-only shortcut — global cross-entity search
+    if (role === ROLES.ADMIN) {
+      out.push({
+        key: "s",
+        label: "Global search",
+        action: () => router.push(ROUTES.SEARCH),
+      });
+    }
+    return out;
+  }, [navByHref, router, commandPalette, role]);
+
+  // Disable the leader while the Cmd+K palette is open so typing "g" into
+  // the search input doesn't get swallowed by the shortcut handler.
+  const { isWaiting: leaderWaiting } = useLeaderKey({
+    bindings: leaderBindings,
+    enabled: !commandPalette.open,
+  });
 
   return (
     <>
@@ -308,6 +544,24 @@ export function Header() {
 
         {/* Right: Actions */}
         <div className="flex items-center gap-3">
+          {/* Global search — admin only. The /search page itself is reachable
+              by direct URL for any role, but the backend search service already
+              role-scopes results (recruiter sees only their own candidates,
+              RM sees their team, admin sees everything). The UI affordance
+              is admin-only because cross-entity search (companies, SPs, HR
+              managers, users) is overwhelmingly an admin workflow. */}
+          {role === ROLES.ADMIN && (
+            <Tooltip content="Global search">
+              <IconButton
+                icon={Search}
+                aria-label="Global search"
+                variant="ghost"
+                size="md"
+                onClick={() => router.push(ROUTES.SEARCH)}
+              />
+            </Tooltip>
+          )}
+
           {/* Theme toggle */}
           <Tooltip content={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}>
             <IconButton
@@ -406,7 +660,12 @@ export function Header() {
         open={commandPalette.open}
         onClose={commandPalette.onClose}
         groups={commandGroups}
+        history={queryHistory}
+        onSubmitQuery={pushQuery}
       />
+
+      {/* Leader-key HUD — waiting hint + ? help overlay */}
+      <ShortcutHud isWaiting={leaderWaiting} bindings={leaderBindings} />
     </>
   );
 }

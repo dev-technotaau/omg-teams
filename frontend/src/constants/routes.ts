@@ -13,7 +13,10 @@ export const ROUTES = {
   PROFILE: "/profile",
   SETTINGS: "/settings",
   NOTIFICATION_SETTINGS: "/settings/notifications",
-  SEARCH: "/search",
+  // Global cross-entity search — admin-only feature (gated by /admin/* prefix
+  // in proxy.ts). The /search backend endpoint also returns nothing useful
+  // for non-admin roles, so the redirect is just belt-and-braces.
+  SEARCH: "/admin/search",
   HELP: "/help",
 
   // Reports / Candidates

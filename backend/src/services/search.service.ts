@@ -66,7 +66,9 @@ export async function globalSearch(
         id: c.id,
         title: c.candidateName ?? "Unnamed",
         subtitle: c.contactNo ?? c.emailId ?? null,
-        url: `/admin/reports?search=${encodeURIComponent(query)}`,
+        // Deep-link to the candidate's detail page rather than a filtered
+        // list. Admin and recruiter/RM use different paths.
+        url: role === "ADMIN" ? `/admin/reports/${c.id}` : `/reports/${c.id}`,
       }));
       totalCount += candidates.length;
     }
@@ -85,7 +87,11 @@ export async function globalSearch(
         id: c.id,
         title: c.name,
         subtitle: null,
-        url: `/admin/companies`,
+        // ?highlight=<id>&type=<kind> — the companies page reads these to
+        // scroll-into-view + flash the matching row + auto-expand the
+        // parent company. The list page has no per-entity detail route,
+        // so deep-linking is done in-place.
+        url: `/admin/companies?highlight=${c.id}&type=company`,
       }));
       totalCount += companies.length;
     }
@@ -104,7 +110,7 @@ export async function globalSearch(
         id: sp.id,
         title: sp.name,
         subtitle: sp.company.name,
-        url: `/admin/companies`,
+        url: `/admin/companies?highlight=${sp.id}&type=sp`,
       }));
       totalCount += sps.length;
     }
@@ -123,7 +129,7 @@ export async function globalSearch(
         id: hr.id,
         title: hr.name,
         subtitle: hr.company.name,
-        url: `/admin/companies`,
+        url: `/admin/companies?highlight=${hr.id}&type=hr`,
       }));
       totalCount += hrs.length;
     }
@@ -168,7 +174,10 @@ export async function globalSearch(
         id: u.id,
         title: `${u.firstName} ${u.lastName}`,
         subtitle: u.employeeId ?? u.email,
-        url: role === "ADMIN" ? `/admin/users` : `/my-recruiters`,
+        // Deep-link to the user's detail page rather than the list.
+        // Admin → employee detail; RM → their recruiter detail.
+        url:
+          role === "ADMIN" ? `/admin/employees/${u.id}` : `/my-recruiters/${u.id}`,
       }));
       totalCount += users.length;
     }
