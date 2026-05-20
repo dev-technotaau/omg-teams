@@ -450,10 +450,10 @@ export default function AdminDashboardPage() {
             Sourced from AttendanceRecord (one row per user per day), so
             each user appears exactly once with their first punch-in time.
             Multi-session badge surfaces re-logins. */}
-        <div className="border-border-default bg-bg-surface rounded-lg border p-5">
+        <div className="border-border-default bg-bg-surface flex flex-col rounded-lg border p-5">
           <h3 className="text-text-secondary text-sm font-medium">Today&apos;s Attendance</h3>
           {stats?.logins && stats.logins.length > 0 ? (
-            <div className="mt-3 max-h-48 space-y-1 overflow-y-auto">
+            <div className="mt-3 min-h-0 flex-1 space-y-1 overflow-y-auto">
               {stats.logins.map((login) => (
                 <div
                   key={login.id}
@@ -504,7 +504,7 @@ export default function AdminDashboardPage() {
               <h4 className="text-text-muted mt-4 text-xs font-semibold tracking-wider uppercase">
                 Not Yet Punched In ({stats.notLoggedIn.length})
               </h4>
-              <div className="mt-2 max-h-32 space-y-1 overflow-y-auto">
+              <div className="mt-2 min-h-0 flex-1 space-y-1 overflow-y-auto">
                 {stats.notLoggedIn.map((emp) => (
                   <div
                     key={emp.id}
