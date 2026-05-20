@@ -196,12 +196,6 @@ export const ADMIN_GROUPS: NavGroup[] = [
     icon: Briefcase,
     children: [
       { label: "Companies", href: ROUTES.ADMIN_COMPANIES, icon: Building2, roles: [ROLES.ADMIN] },
-      {
-        label: "Offer Letters",
-        href: ROUTES.ADMIN_OFFER_LETTERS,
-        icon: FileSignature,
-        roles: [ROLES.ADMIN],
-      },
       { label: "Duplicates", href: ROUTES.ADMIN_DUPLICATES, icon: Copy, roles: [ROLES.ADMIN] },
     ],
   },
@@ -230,6 +224,12 @@ export const ADMIN_GROUPS: NavGroup[] = [
         icon: CalendarDays,
         roles: [ROLES.ADMIN],
         shortcut: { key: "l" },
+      },
+      {
+        label: "Offer Letters",
+        href: ROUTES.ADMIN_OFFER_LETTERS,
+        icon: FileSignature,
+        roles: [ROLES.ADMIN],
       },
     ],
   },

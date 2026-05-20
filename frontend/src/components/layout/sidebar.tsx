@@ -79,6 +79,46 @@ function NavGroupSection({
   const activeIndex = items.findIndex((c) => isPathActive(c.href));
   const GroupIcon = group.icon;
 
+  // ── Trace endpoint (the lowest lit child index) ──
+  // Two anchors can light the trace: transient hover + sticky active.
+  // Whichever is further wins, so hovering BELOW active extends; hovering
+  // ABOVE active doesn't shrink it.
+  const hoverIdx = hoveredIndex ?? -1;
+  const pathEnd = Math.max(hoverIdx, activeIndex);
+
+  // ── Directional stagger ──
+  // To make the wire feel like a liquid filling top-down (when growing)
+  // and draining bottom-up (when shrinking), we apply a per-child
+  // `transition-delay` derived from the previous vs current pathEnd:
+  //   - Growing: newly-lit children get delays 0, S, 2S, … from the top
+  //   - Shrinking: newly-unlit children get delays such that the bottom
+  //     drains first (the topmost newly-default child waits longest)
+  // Per-child delay is applied to the ::before/::after via a CSS custom
+  // property (--trace-delay) read by Tailwind arbitrary-value classes.
+  // Canonical usePrevious pattern. The ref holds the previous pathEnd so we
+  // can compare against the new value and decide which children are newly
+  // lit vs newly unlit. The ref is read once at the top of render, the
+  // delay array is computed below, then the ref is updated in an effect
+  // post-commit. The result is direction-aware staggered delays:
+  //   - Growing: newly lit children get ascending delays from the top.
+  //   - Shrinking: newly unlit children get delays so the bottom drains
+  //     first (top-most newly-default child waits the longest).
+  const prevPathEndRef = useRef(pathEnd);
+  const STAGGER_MS = 70;
+  // eslint-disable-next-line react-hooks/refs
+  const delays = items.map((_, index) => {
+    const prev = prevPathEndRef.current;
+    if (pathEnd > prev) {
+      if (index > prev && index <= pathEnd) return (index - prev - 1) * STAGGER_MS;
+    } else if (pathEnd < prev) {
+      if (index > pathEnd && index <= prev) return (prev - index) * STAGGER_MS;
+    }
+    return 0;
+  });
+  useEffect(() => {
+    prevPathEndRef.current = pathEnd;
+  }, [pathEnd]);
+
   return (
     <div>
       <button
@@ -106,19 +146,6 @@ function NavGroupSection({
         >
           {items.map((child, index) => {
             const isActive = index === activeIndex;
-            // ── Trace-highlight rules ──
-            // Two independent anchors can light up the trace:
-            //   1. Hover anchor → hoveredIndex (transient)
-            //   2. Active anchor → activeIndex (sticks after clicking)
-            // The trace extends from the top of the group down to whichever
-            // anchor is further (`max(hoveredIndex, activeIndex)`), so:
-            //   - With nothing hovered, the trace shows the active path.
-            //   - Hovering BELOW the active row extends the trace further.
-            //   - Hovering ABOVE the active row keeps the active trace
-            //     intact (active-anchor dominates).
-            //   - On mouseleave, the trace falls back to the active path.
-            const hoverIdx = hoveredIndex ?? -1;
-            const pathEnd = Math.max(hoverIdx, activeIndex);
             const beforeHighlight = pathEnd >= 0 && index <= pathEnd;
             const afterHighlight = pathEnd >= 0 && index < pathEnd;
             const Icon = child.icon;
@@ -128,12 +155,21 @@ function NavGroupSection({
                 href={child.href}
                 onMouseEnter={() => setHoveredIndex(index)}
                 onClick={onNavigate}
+                style={
+                  {
+                    "--trace-delay": `${delays[index] ?? 0}ms`,
+                  } as React.CSSProperties
+                }
                 className={cn(
                   "group/child relative my-0.5 ml-3 flex items-center gap-2 rounded-md px-2.5 py-1.5 text-sm transition-colors",
-                  // L-piece (top half) with rounded corner + horizontal tick
-                  "before:absolute before:-left-3 before:top-0 before:h-1/2 before:w-3 before:rounded-bl-md before:border-b before:border-l before:transition-colors before:duration-200",
-                  // Vertical continuation (lower half) — hidden on the last child
-                  "after:absolute after:-left-3 after:top-1/2 after:bottom-0 after:w-3 after:border-l after:transition-colors after:duration-200 last:after:content-none",
+                  // L-piece (top half) with rounded corner + horizontal tick.
+                  // Per-child --trace-delay drives the staggered fill/drain.
+                  "before:absolute before:-left-3 before:top-0 before:h-1/2 before:w-3 before:rounded-bl-md before:border-b before:border-l before:transition-colors before:duration-200 before:delay-(--trace-delay,0ms)",
+                  // Continuation (lower half) — extended 2px past the bottom
+                  // edge of the row into the inter-row margin so successive
+                  // children's lines join with no visible gap. The last
+                  // child has no ::after, so the trace ends cleanly there.
+                  "after:absolute after:-left-3 after:top-1/2 after:-bottom-0.5 after:w-3 after:border-l after:transition-colors after:duration-200 after:delay-(--trace-delay,0ms) last:after:content-none",
                   beforeHighlight
                     ? "before:border-primary-500"
                     : "before:border-border-default",
